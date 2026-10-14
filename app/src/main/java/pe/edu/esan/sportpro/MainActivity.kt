@@ -4,44 +4,43 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
+import pe.edu.esan.sportpro.data.repository.AcademyRepositoryImpl
+import pe.edu.esan.sportpro.data.repository.TrainingRepositoryImpl
+import pe.edu.esan.sportpro.ui.navigation.SportProNavigation
 import pe.edu.esan.sportpro.ui.theme.SportProTheme
+import pe.edu.esan.sportpro.ui.viewmodel.AcademyViewModel
+import pe.edu.esan.sportpro.ui.viewmodel.TrainingViewModel
 
 class MainActivity : ComponentActivity() {
+
+    private val academyViewModel: AcademyViewModel by viewModels {
+        AcademyViewModel.Factory(AcademyRepositoryImpl())
+    }
+
+    private val trainingViewModel: TrainingViewModel by viewModels {
+        TrainingViewModel.Factory(TrainingRepositoryImpl())
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
             SportProTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    Greeting(
-                        name = "Android",
-                        modifier = Modifier.padding(innerPadding)
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
+                    SportProNavigation(
+                        viewModel = academyViewModel,
+                        trainingViewModel = trainingViewModel
                     )
                 }
             }
         }
-    }
-}
-
-@Composable
-fun Greeting(name: String, modifier: Modifier = Modifier) {
-    Text(
-        text = "Hello $name!",
-        modifier = modifier
-    )
-}
-
-@Preview(showBackground = true)
-@Composable
-fun GreetingPreview() {
-    SportProTheme {
-        Greeting("Android")
     }
 }

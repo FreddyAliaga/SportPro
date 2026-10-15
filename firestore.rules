@@ -1,0 +1,71 @@
+rules_version = '2';
+
+// Reglas de seguridad de Cloud Firestore – SportPro
+// Versión US-001 (registro con código de invitación e inicio de sesión). Se amplían en US-016.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function invitationAfter(code) {
+      return getAfter(/databases/$(database)/documents/invitations/$(code)).data;
+    }
+
+    // Códigos de invitación: el ID del documento es el código.
+    match /invitations/{code} {
+      // Se puede consultar UN código conocido (para validarlo), pero no listar todos.
+      allow get: if true;
+      allow list: if false;
+
+      // Solo se puede marcar como usado una vez, por la persona que se registra,
+      // si no venció ni fue anulado, y cambiando únicamente used / usedBy / usedAt.
+      allow update: if signedIn()
+        && resource.data.get('used', false) == false
+        && resource.data.get('status', 'PENDIENTE') != 'ANULADO'
+        && (!('expiresAt' in resource.data) || request.time < resource.data.expiresAt)
+        && request.resource.data.used == true
+        && request.resource.data.usedBy == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['used', 'usedBy', 'usedAt'])
+        // el código solo se gasta en la misma transacción que crea el perfil
+        && existsAfter(/databases/$(database)/documents/users/$(request.auth.uid));
+
+      // Los crea el ADM o el DT (US-002 y US-003); por ahora solo desde la consola.
+      allow create, delete: if false;
+    }
+
+    // Perfil de cada usuario (solo personas de 18 años o más tienen cuenta)
+    match /users/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+
+      // Se crea en la misma transacción que marca el código como usado:
+      // el rol y la academia deben coincidir con los del código y debe aceptar los términos de uso.
+      allow create: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['name', 'email', 'phoneNumber', 'birthDate', 'invitationCode', 'role', 'academyId', 'academyName', 'teamId', 'playerId', 'status', 'termsAccepted', 'createdAt'])
+        && request.resource.data.status == 'pending_verification'
+        && request.resource.data.termsAccepted.version is string
+        && invitationAfter(request.resource.data.invitationCode).usedBy == request.auth.uid
+        && request.resource.data.role == invitationAfter(request.resource.data.invitationCode).role
+        && request.resource.data.academyId == invitationAfter(request.resource.data.invitationCode).academyId
+        && request.resource.data.teamId == invitationAfter(request.resource.data.invitationCode).get('teamId', '')
+        && request.resource.data.playerId == invitationAfter(request.resource.data.invitationCode).get('playerId', '');
+
+      // Tras verificar el correo, la cuenta pasa de "pending_verification" a "active".
+      allow update: if signedIn()
+        && request.auth.uid == uid
+        && request.auth.token.email_verified == true
+        && resource.data.status == 'pending_verification'
+        && request.resource.data.status == 'active'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']);
+
+      allow delete: if false;
+    }
+
+    // Todo lo demás queda cerrado hasta que lo abra su historia de usuario.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

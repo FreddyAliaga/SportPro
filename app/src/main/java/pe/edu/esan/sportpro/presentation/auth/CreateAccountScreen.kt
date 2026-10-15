@@ -36,6 +36,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import pe.edu.esan.sportpro.presentation.components.DateVisualTransformation
 import pe.edu.esan.sportpro.presentation.components.ErrorBox
 import pe.edu.esan.sportpro.presentation.components.PrimaryButton
 import pe.edu.esan.sportpro.presentation.components.SportProCard
@@ -106,10 +107,13 @@ fun CreateAccountScreen(
                 )
                 SportProTextField(
                     value = form.birthDate,
-                    onValueChange = { viewModel.onFormChange(form.copy(birthDate = it.take(10))) },
+                    // Solo se guardan los dígitos; las barras las pone DateVisualTransformation
+                    onValueChange = { viewModel.onFormChange(form.copy(birthDate = it.filter(Char::isDigit).take(8))) },
                     label = "Nacimiento",
                     placeholder = "DD/MM/AAAA",
                     error = errors.birthDate,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    visualTransformation = DateVisualTransformation(),
                     modifier = Modifier.weight(1f)
                 )
             }

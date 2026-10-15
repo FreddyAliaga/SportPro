@@ -190,10 +190,12 @@ class RegisterViewModel : ViewModel() {
         else -> null
     }
 
+    // birthDate llega solo con dígitos (ej. "14031988"); fecha incompleta o inválida -> null
     private fun ageFrom(birthDate: String): Int? {
+        if (!Regex("^\\d{8}$").matches(birthDate)) return null
         return try {
-            val formatter = DateTimeFormatter.ofPattern("dd/MM/uuuu").withResolverStyle(ResolverStyle.STRICT)
-            val date = LocalDate.parse(birthDate.trim(), formatter)
+            val formatter = DateTimeFormatter.ofPattern("ddMMuuuu").withResolverStyle(ResolverStyle.STRICT)
+            val date = LocalDate.parse(birthDate, formatter)
             if (date.isAfter(LocalDate.now())) null else Period.between(date, LocalDate.now()).years
         } catch (e: Exception) {
             null

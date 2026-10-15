@@ -60,7 +60,7 @@ object FirebaseAuthManager {
                     "name" to form.fullName.trim(),
                     "email" to form.email.trim(),
                     "phoneNumber" to form.phone.trim(),
-                    "birthDate" to form.birthDate.trim(),
+                    "birthDate" to toSlashDate(form.birthDate),
                     "invitationCode" to invitation.code,
                     "role" to invitation.role,
                     "academyId" to invitation.academyId,
@@ -213,6 +213,10 @@ object FirebaseAuthManager {
         teamId = getString("teamId") ?: "",
         status = getString("status") ?: ""
     )
+
+    // El formulario guarda solo dígitos ("14031988"); en Firestore se guarda "14/03/1988"
+    private fun toSlashDate(digits: String): String =
+        "${digits.take(2)}/${digits.drop(2).take(2)}/${digits.drop(4)}"
 
     // Mensajes claros en español para los errores de Firebase.
     // El orden importa: WeakPassword es un tipo de InvalidCredentials.

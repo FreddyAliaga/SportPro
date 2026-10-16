@@ -1,7 +1,6 @@
 package pe.edu.esan.sportpro.presentation.academy
 
 import android.net.Uri
-import android.util.Patterns
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -21,6 +20,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import pe.edu.esan.sportpro.data.model.AcademyForm
+import pe.edu.esan.sportpro.data.model.AcademyFormErrors
 import pe.edu.esan.sportpro.presentation.components.ErrorBox
 import pe.edu.esan.sportpro.presentation.components.InfoBox
 import pe.edu.esan.sportpro.presentation.components.LogoPicker
@@ -34,35 +34,6 @@ import pe.edu.esan.sportpro.presentation.components.TopBarWithSteps
 import pe.edu.esan.sportpro.ui.theme.TextoPrincipal
 import pe.edu.esan.sportpro.ui.theme.TextoSobreSuave
 import pe.edu.esan.sportpro.ui.theme.Turquesa
-
-// Errores por campo del formulario de la academia
-data class AcademyFormErrors(
-    val name: String? = null,
-    val city: String? = null,
-    val institutionalEmail: String? = null,
-    val callupNoticeHours: String? = null,
-    val callupConfirmHours: String? = null
-) {
-    val hasErrors: Boolean
-        get() = listOf(name, city, institutionalEmail, callupNoticeHours, callupConfirmHours).any { it != null }
-}
-
-// Validación del formulario (la usan el registro y "Editar academia")
-fun validateAcademyForm(form: AcademyForm): AcademyFormErrors {
-    val notice = form.callupNoticeHours.toIntOrNull()
-    val confirm = form.callupConfirmHours.toIntOrNull()
-    return AcademyFormErrors(
-        name = if (form.name.trim().length < 3) "Escribe el nombre de la academia." else null,
-        city = if (form.city.isBlank()) "Escribe la ciudad." else null,
-        institutionalEmail = if (!Patterns.EMAIL_ADDRESS.matcher(form.institutionalEmail.trim()).matches()) "Escribe un correo válido." else null,
-        callupNoticeHours = if (notice == null || notice !in 1..168) "Entre 1 y 168 horas." else null,
-        callupConfirmHours = when {
-            confirm == null || confirm < 0 -> "Escribe las horas."
-            notice != null && confirm >= notice -> "Debe ser menor que la anticipación."
-            else -> null
-        }
-    )
-}
 
 // RN-018: mientras no esté verificada (campo verified, se cambia desde la consola),
 // la academia no puede publicar avisos de pruebas. Aquí solo se muestra el aviso.

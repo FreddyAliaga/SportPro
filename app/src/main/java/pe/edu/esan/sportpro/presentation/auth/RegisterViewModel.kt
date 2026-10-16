@@ -19,8 +19,8 @@ import pe.edu.esan.sportpro.data.model.MIN_ACCOUNT_AGE
 import pe.edu.esan.sportpro.data.model.RegisterForm
 import pe.edu.esan.sportpro.data.remote.FirebaseAuthManager
 import pe.edu.esan.sportpro.data.remote.InvitationRepository
-import pe.edu.esan.sportpro.presentation.academy.AcademyFormErrors
-import pe.edu.esan.sportpro.presentation.academy.validateAcademyForm
+import pe.edu.esan.sportpro.data.model.AcademyFormErrors
+import pe.edu.esan.sportpro.data.model.validateAcademyForm
 import pe.edu.esan.sportpro.presentation.components.compressImageToBase64
 import java.time.LocalDate
 import java.time.Period

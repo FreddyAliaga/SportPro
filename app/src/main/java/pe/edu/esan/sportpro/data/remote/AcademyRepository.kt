@@ -45,7 +45,10 @@ object AcademyRepository {
         val registration = academyRef(academyId).addSnapshotListener { snapshot, error ->
             when {
                 error != null -> trySend(Result.failure(Exception(FirebaseAuthManager.friendlyMessage(error))))
-                snapshot != null && snapshot.exists() -> trySend(Result.success(snapshot.toAcademy()))
+                snapshot == null -> Unit
+                snapshot.exists() -> trySend(Result.success(snapshot.toAcademy()))
+                // Si no existe se avisa (en vez de quedarse cargando para siempre)
+                else -> trySend(Result.failure(Exception("No encontramos tu academia.")))
             }
         }
         awaitClose { registration.remove() }
@@ -77,14 +80,21 @@ object AcademyRepository {
     // ---------------------------------------------------------------- Academia
 
     // Guarda los datos de la academia. Si cambió el nombre, también se actualiza la copia
-    // "academyName" en los perfiles de la academia (es la que se muestra en el inicio).
+    // "academyName" en los perfiles de la academia (es la que se muestra en el inicio)
+    // y en sus códigos pendientes (es la que ve quien se registra con el código).
     suspend fun updateAcademy(academy: Academy, previousName: String): Result<Unit> {
         return try {
             val newName = academy.name.trim()
-            // Consulta en el servidor: sin internet falla aquí, antes de escribir nada
-            val members = if (newName != previousName) {
+            val renamed = newName != previousName
+            // Consultas en el servidor: sin internet falla aquí, antes de escribir nada
+            val members = if (renamed) {
                 firestore.collection("users").whereEqualTo("academyId", academy.id)
                     .get(Source.SERVER).await().documents
+            } else emptyList()
+            val pendingCodes = if (renamed) {
+                invitationsRef.whereEqualTo("academyId", academy.id).whereEqualTo("used", false)
+                    .get(Source.SERVER).await().documents
+                    .filter { it.getString("status") != InvitationStatus.REVOKED }
             } else emptyList()
 
             firestore.runTransaction { transaction ->
@@ -100,6 +110,18 @@ object AcademyRepository {
                     )
                 )
                 members.forEach { transaction.update(it.reference, "academyName", newName) }
+                pendingCodes.forEach { code ->
+                    // invitedByName solo se cambia en los códigos que creó la administración
+                    // (los de otros, como los del DT en la US-003, se dejan igual)
+                    if (code.getString("invitedByName") == adminInviterName(previousName)) {
+                        transaction.update(
+                            code.reference,
+                            mapOf("academyName" to newName, "invitedByName" to adminInviterName(newName))
+                        )
+                    } else {
+                        transaction.update(code.reference, "academyName", newName)
+                    }
+                }
             }.await()
             Result.success(Unit)
         } catch (e: Exception) {
@@ -170,11 +192,31 @@ object AcademyRepository {
         }
     }
 
-    // "Desactivar equipo": no se borra, solo queda active = false (se conserva su historial)
-    suspend fun setTeamActive(academyId: String, teamId: String, active: Boolean): Result<Unit> {
+    // "Desactivar equipo": no se borra, solo queda active = false (se conserva su historial).
+    // En la misma operación se anulan sus códigos de DT pendientes y su DT queda sin equipo.
+    // currentCoachUids: DT activos que hoy tienen este equipo.
+    suspend fun setTeamActive(
+        academyId: String,
+        teamId: String,
+        active: Boolean,
+        currentCoachUids: List<String>
+    ): Result<Unit> {
         return try {
+            // Consulta en el servidor: sin internet falla aquí, antes de escribir nada
+            val pendingCodes = if (!active) {
+                invitationsRef.whereEqualTo("academyId", academyId)
+                    .whereEqualTo("role", "DT")
+                    .whereEqualTo("teamId", teamId)
+                    .get(Source.SERVER).await().documents
+                    .filter { it.getBoolean("used") != true && it.getString("status") != InvitationStatus.REVOKED }
+            } else emptyList()
+
             firestore.runTransaction { transaction ->
                 transaction.update(teamsRef(academyId).document(teamId), "active", active)
+                if (!active) {
+                    pendingCodes.forEach { transaction.update(it.reference, "status", InvitationStatus.REVOKED) }
+                    currentCoachUids.forEach { uid -> transaction.update(userRef(uid), "teamId", "") }
+                }
             }.await()
             Result.success(Unit)
         } catch (e: Exception) {
@@ -185,14 +227,16 @@ object AcademyRepository {
     // ---------------------------------------------------------------- Usuarios
 
     // "Desactivar cuenta" = status "inactive"; "Reactivar" = "active". Nunca se borra.
-    suspend fun setUserActive(uid: String, active: Boolean): Result<Unit> {
+    // Al desactivar a un DT, en la misma operación queda sin equipo (teamId ""): así, al
+    // reactivarlo, no aparecen 2 DT en el mismo equipo. El ADM le asigna equipo con "Cambiar DT".
+    suspend fun setUserActive(user: UserProfile, active: Boolean): Result<Unit> {
         return try {
             firestore.runTransaction { transaction ->
-                transaction.update(
-                    userRef(uid),
-                    "status",
-                    if (active) AccountStatus.ACTIVE else AccountStatus.INACTIVE
-                )
+                val ref = userRef(user.uid)
+                transaction.update(ref, "status", if (active) AccountStatus.ACTIVE else AccountStatus.INACTIVE)
+                if (!active && user.role == "DT" && user.teamId.isNotEmpty()) {
+                    transaction.update(ref, "teamId", "")
+                }
             }.await()
             Result.success(Unit)
         } catch (e: Exception) {
@@ -215,7 +259,7 @@ object AcademyRepository {
                 "role" to "DT",
                 "teamId" to team.id,
                 "teamName" to team.name,
-                "invitedByName" to "la administración de la academia (${admin.name})",
+                "invitedByName" to adminInviterName(academy.name),
                 "playerId" to "",
                 "playerName" to "",
                 "used" to false,
@@ -244,6 +288,9 @@ object AcademyRepository {
         }
     }
 
+    // Texto "invitado por …" de los códigos que crea el ADM (la regla usa el mismo texto)
+    private fun adminInviterName(academyName: String) = "la administración de $academyName"
+
     // Anular = status "ANULADO" (RN-002). El código no se borra; un código usado no se puede anular.
     suspend fun revokeInvitation(code: String): Result<Unit> {
         return try {
@@ -263,17 +310,21 @@ object AcademyRepository {
 
     // ---------------------------------------------------------------- Código de invitación
 
-    // Alfabeto sin caracteres que se confunden (sin I, O, 0 ni 1)
+    // Formato del código: PREFIJO (4 letras A-Z) + "-" + 6 caracteres del alfabeto sin confusiones.
+    // Coincide con la regla: code.matches('^[A-Z]{4}-[A-Z2-9]{6}$')
+    // Parte al azar: sin caracteres que se confunden (sin I, O, 0 ni 1)
     private const val CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    // Relleno del prefijo: solo letras (el prefijo nunca lleva números)
+    private const val PREFIX_FILL_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ"
     private val secureRandom = SecureRandom()
 
     // Palabras que no sirven para el prefijo ("Academia Los Halcones" -> HALC)
     private val SKIP_WORDS = setOf("ACADEMIA", "ESCUELA", "CLUB", "DE", "DEL", "LA", "LAS", "LOS", "EL", "FC", "CF")
 
-    private fun randomPart(length: Int = 6): String =
-        (1..length).map { CODE_ALPHABET[secureRandom.nextInt(CODE_ALPHABET.length)] }.joinToString("")
+    private fun randomPart(length: Int = 6, alphabet: String = CODE_ALPHABET): String =
+        (1..length).map { alphabet[secureRandom.nextInt(alphabet.length)] }.joinToString("")
 
-    // 4 letras del nombre, sin tildes; si el nombre es muy corto se completa al azar
+    // 4 letras A-Z del nombre, sin tildes; si el nombre es muy corto se completa con letras al azar
     fun codePrefix(academyName: String): String {
         val words = Normalizer.normalize(academyName, Normalizer.Form.NFD)
             .replace(Regex("\\p{Mn}+"), "")   // quita tildes (Ñ -> N)
@@ -282,7 +333,7 @@ object AcademyRepository {
             .filter { it.isNotEmpty() }
         val significant = words.filter { it !in SKIP_WORDS }.ifEmpty { words }
         val letters = significant.joinToString("").take(4)
-        return letters + randomPart(4 - letters.length)
+        return letters + randomPart(4 - letters.length, PREFIX_FILL_ALPHABET)
     }
 
     // ---------------------------------------------------------------- Conversión de documentos

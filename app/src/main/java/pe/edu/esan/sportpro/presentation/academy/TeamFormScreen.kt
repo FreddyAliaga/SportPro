@@ -70,7 +70,8 @@ fun TeamFormScreen(
     if (showDeactivate && team != null) {
         ConfirmDialog(
             title = "¿Desactivar ${team.name}?",
-            text = "El equipo deja de aparecer entre los activos. No se borra: sus partidos, entrenamientos y registros se conservan.",
+            text = "El equipo deja de aparecer entre los activos. Sus códigos de DT pendientes se anulan y su DT queda sin equipo. " +
+                "No se borra: sus partidos, entrenamientos y registros se conservan.",
             confirmText = "Desactivar",
             onDismiss = { showDeactivate = false },
             onConfirm = {

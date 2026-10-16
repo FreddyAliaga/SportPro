@@ -136,7 +136,9 @@ fun ToggleUserDialog(user: UserProfile, onDismiss: () -> Unit, onConfirm: () -> 
     val isActive = user.status == AccountStatus.ACTIVE
     val body = if (isActive) {
         "Ya no podrá iniciar sesión. Sus partidos, entrenamientos y registros anteriores se conservan." +
-            if (user.role == "DT" && user.teamId.isNotEmpty()) " Su equipo quedará Sin DT." else ""
+            if (user.role == "DT" && user.teamId.isNotEmpty()) {
+                " Su equipo quedará Sin DT; si lo reactivas, asígnale un equipo con Cambiar DT."
+            } else ""
     } else {
         "Podrá volver a iniciar sesión con sus mismos permisos."
     }

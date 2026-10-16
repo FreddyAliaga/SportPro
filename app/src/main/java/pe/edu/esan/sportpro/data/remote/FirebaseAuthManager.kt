@@ -8,6 +8,7 @@ import com.google.firebase.auth.FirebaseAuthInvalidCredentialsException
 import com.google.firebase.auth.FirebaseAuthInvalidUserException
 import com.google.firebase.auth.FirebaseAuthUserCollisionException
 import com.google.firebase.auth.FirebaseAuthWeakPasswordException
+import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
@@ -15,6 +16,7 @@ import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.Source
 import kotlinx.coroutines.tasks.await
 import pe.edu.esan.sportpro.data.model.AccountStatus
+import pe.edu.esan.sportpro.data.model.Academy
 import pe.edu.esan.sportpro.data.model.Invitation
 import pe.edu.esan.sportpro.data.model.RegisterForm
 import pe.edu.esan.sportpro.data.model.TERMS_VERSION
@@ -39,7 +41,7 @@ object FirebaseAuthManager {
     // El código se marca como usado en la MISMA operación (transacción) que crea el perfil,
     // así nadie puede reutilizarlo (RN-002).
     suspend fun registerWithInvitation(form: RegisterForm, invitation: Invitation): Result<Unit> {
-        var accountCreated = false
+        var account: AuthAccount? = null
         return try {
             val birthDate = toTimestamp(form.birthDate)
 
@@ -51,9 +53,8 @@ object FirebaseAuthManager {
                 throw IllegalStateException(InvitationRepository.INVALID_CODE_MESSAGE)
             }
 
-            val authResult = auth.createUserWithEmailAndPassword(form.email.trim(), form.password).await()
-            val user = authResult.user ?: throw Exception("No se pudo crear la cuenta.")
-            accountCreated = true
+            account = createOrRecoverUser(form.email.trim(), form.password)
+            val user = account.user
             val uid = user.uid
 
             val invitationRef = firestore.collection("invitations").document(invitation.code)
@@ -97,16 +98,131 @@ object FirebaseAuthManager {
             }.await()
 
             // El perfil ya existe y el código quedó usado: desde aquí ya no se borra la cuenta
-            accountCreated = false
+            account = null
             // Firebase envía el correo de verificación; si falla, la persona puede usar "Reenviar enlace"
             try { user.sendEmailVerification().await() } catch (_: Exception) { }
             Result.success(Unit)
 
         } catch (e: Exception) {
-            // Si la cuenta se creó pero falló la transacción, se borra para no dejarla a medias
-            if (accountCreated) {
-                try { auth.currentUser?.delete()?.await() } catch (_: Exception) { }
+            undoAccount(account)
+            Result.failure(Exception(friendlyMessage(e)))
+        }
+    }
+
+    // Usuario de Auth listo para registrarse; isNew = se creó recién en este intento
+    private class AuthAccount(val user: FirebaseUser, val isNew: Boolean)
+
+    // Crea el usuario de Auth. Si el correo ya existe, puede ser un registro que quedó a medias
+    // (se creó el usuario de Auth pero falló la transacción y no se pudo borrar, por ejemplo al
+    // cortarse el internet): si la contraseña coincide y NO tiene perfil, se continúa con ese uid.
+    // Si ya tiene perfil, se informa que el correo ya tiene una cuenta.
+    private suspend fun createOrRecoverUser(email: String, password: String): AuthAccount {
+        try {
+            val user = auth.createUserWithEmailAndPassword(email, password).await().user
+                ?: throw Exception("No se pudo crear la cuenta.")
+            return AuthAccount(user, isNew = true)
+        } catch (collision: FirebaseAuthUserCollisionException) {
+            // Contraseña distinta (o cualquier error al entrar): es la cuenta de otra persona
+            val user = try {
+                auth.signInWithEmailAndPassword(email, password).await().user
+            } catch (_: Exception) {
+                null
+            } ?: throw collision
+            val hasProfile = try {
+                firestore.collection("users").document(user.uid).get(Source.SERVER).await().exists()
+            } catch (e: Exception) {
+                auth.signOut()
+                throw e
             }
+            if (hasProfile) {
+                auth.signOut()
+                throw collision   // "Ese correo ya tiene una cuenta en SportPro."
+            }
+            return AuthAccount(user, isNew = false)
+        }
+    }
+
+    // Si el registro falla: la cuenta recién creada se borra para no dejarla a medias;
+    // una cuenta recuperada (de un registro incompleto anterior) solo se cierra.
+    private suspend fun undoAccount(account: AuthAccount?) {
+        if (account == null) return
+        if (account.isNew) {
+            try { account.user.delete().await() } catch (_: Exception) { }
+        } else {
+            auth.signOut()
+        }
+    }
+
+    // ---------------------------------------------------------------- Registro del ADM (US-002)
+
+    // "Registrar mi academia": crea la cuenta del administrador SIN código de invitación.
+    // La academia y el perfil ADM se crean en la MISMA operación (transacción): no puede quedar
+    // una academia sin administrador ni un ADM sin academia.
+    suspend fun registerAcademyAdmin(form: RegisterForm, academy: Academy): Result<Unit> {
+        var account: AuthAccount? = null
+        return try {
+            val birthDate = toTimestamp(form.birthDate)
+
+            // COMPROBACIÓN DE CONEXIÓN antes de crear el usuario de Auth.
+            // ¿Por qué? Si se crea el usuario de Auth y luego la transacción falla por falta de internet,
+            // tampoco se podría borrar ese usuario (borrar también necesita internet) y quedaría una
+            // cuenta huérfana: correo "ocupado" pero sin perfil ni academia.
+            // ¿Por qué este documento? Quien se registra aún no tiene sesión y lo único que las reglas
+            // dejan leer sin sesión es un código de invitación (allow get: if true). "CONEXION" no es un
+            // código real: no importa que no exista; solo interesa que el SERVIDOR responda.
+            // Source.SERVER obliga a preguntar al servidor (sin usar la copia guardada en el teléfono):
+            // sin internet lanza UNAVAILABLE y se muestra "No hay conexión…" sin haber creado nada.
+            firestore.collection("invitations").document("CONEXION").get(Source.SERVER).await()
+
+            account = createOrRecoverUser(form.email.trim(), form.password)
+            val user = account.user
+            val uid = user.uid
+
+            val academyRef = firestore.collection("academies").document()   // ID automático
+            val userRef = firestore.collection("users").document(uid)
+
+            val academyData = hashMapOf(
+                "name" to academy.name.trim(),
+                "city" to academy.city.trim(),
+                "institutionalEmail" to academy.institutionalEmail.trim(),
+                "logoBase64" to academy.logoBase64,
+                "callupNoticeHours" to academy.callupNoticeHours,
+                "callupConfirmHours" to academy.callupConfirmHours,
+                "verified" to false,   // la verifica el equipo del proyecto desde la consola
+                "adminUid" to uid,
+                "createdAt" to FieldValue.serverTimestamp()
+            )
+            val userData = hashMapOf(
+                "name" to form.fullName.trim(),
+                "email" to form.email.trim(),
+                "phoneNumber" to form.phone.trim(),
+                "birthDate" to birthDate,   // Timestamp: las reglas comprueban que tenga 18 años o más
+                "invitationCode" to "",
+                "role" to "ADM",
+                "academyId" to academyRef.id,
+                "academyName" to academy.name.trim(),
+                "teamId" to "",
+                "playerId" to "",
+                "status" to AccountStatus.PENDING_VERIFICATION,
+                "termsAccepted" to mapOf(
+                    "version" to TERMS_VERSION,
+                    "acceptedAt" to FieldValue.serverTimestamp()
+                ),
+                "createdAt" to FieldValue.serverTimestamp()
+            )
+
+            // Una transacción (y no un batch) porque falla de inmediato si se corta el internet
+            firestore.runTransaction { transaction ->
+                transaction.set(academyRef, academyData)
+                transaction.set(userRef, userData)
+            }.await()
+
+            account = null
+            try { user.sendEmailVerification().await() } catch (_: Exception) { }
+            Result.success(Unit)
+
+        } catch (e: Exception) {
+            undoAccount(account)
             Result.failure(Exception(friendlyMessage(e)))
         }
     }
@@ -162,17 +278,22 @@ object FirebaseAuthManager {
             auth.signInWithEmailAndPassword(email.trim(), password).await()
             val user = auth.currentUser ?: throw Exception("No se pudo iniciar sesión.")
             user.reload().await()
+
+            // Primero se revisa que exista el perfil (antes que el correo verificado): un registro
+            // incompleto nunca recibió el correo de verificación, así que debe ver este mensaje
+            // y no la pantalla "Revisa tu correo".
+            val userRef = firestore.collection("users").document(user.uid)
+            val doc = userRef.get().await()
+            if (!doc.exists()) {
+                auth.signOut()
+                throw Exception(INCOMPLETE_REGISTRATION_MESSAGE)
+            }
+
             if (auth.currentUser?.isEmailVerified != true) {
                 return Result.success(SignInOutcome.NOT_VERIFIED)
             }
             auth.currentUser?.getIdToken(true)?.await()
 
-            val userRef = firestore.collection("users").document(user.uid)
-            val doc = userRef.get().await()
-            if (!doc.exists()) {
-                auth.signOut()
-                throw Exception("No encontramos tu perfil en SportPro. Pide ayuda a tu academia.")
-            }
             when (doc.getString("status")) {
                 AccountStatus.BLOCKED -> {
                     auth.signOut()
@@ -221,17 +342,6 @@ object FirebaseAuthManager {
 
     fun signOut() = auth.signOut()
 
-    private fun DocumentSnapshot.toUserProfile() = UserProfile(
-        uid = id,
-        name = getString("name") ?: "",
-        email = getString("email") ?: "",
-        role = getString("role") ?: "",
-        academyId = getString("academyId") ?: "",
-        academyName = getString("academyName") ?: "",
-        teamId = getString("teamId") ?: "",
-        status = getString("status") ?: ""
-    )
-
     // El formulario guarda solo dígitos ("14031988"); en Firestore se guarda como Timestamp.
     // Se usa las 12:00 (mediodía) UTC: a las 00:00 UTC, en Lima (UTC-5) se vería el día anterior.
     // Al mediodía UTC cae en el mismo día en cualquier zona horaria de América.
@@ -244,6 +354,10 @@ object FirebaseAuthManager {
 
     const val NO_CONNECTION_MESSAGE = "No hay conexión a internet. Revísala e inténtalo de nuevo."
 
+    // Cuenta de Auth sin perfil (el registro se cortó a la mitad): se termina registrándose otra vez
+    const val INCOMPLETE_REGISTRATION_MESSAGE =
+        "Tu registro quedó incompleto. Vuelve a registrarte con el mismo correo y contraseña para terminarlo."
+
     // Mensajes claros en español para los errores de Firebase.
     // El orden importa: WeakPassword es un tipo de InvalidCredentials.
     fun friendlyMessage(e: Exception): String = when {
@@ -255,6 +369,22 @@ object FirebaseAuthManager {
         e is FirebaseNetworkException -> NO_CONNECTION_MESSAGE
         // Firestore sin internet (y sin copia guardada en el teléfono)
         e is FirebaseFirestoreException && e.code == FirebaseFirestoreException.Code.UNAVAILABLE -> NO_CONNECTION_MESSAGE
+        // Las reglas de Firestore no permiten la operación
+        e is FirebaseFirestoreException && e.code == FirebaseFirestoreException.Code.PERMISSION_DENIED ->
+            "No se pudo completar la operación por permisos. Revisa los datos e inténtalo de nuevo."
         else -> e.message ?: "Ocurrió un error. Inténtalo de nuevo."
     }
 }
+
+// Convierte users/{uid} en UserProfile.
+// Está fuera del object para que también la use AcademyRepository al listar los usuarios de la academia (US-002).
+fun DocumentSnapshot.toUserProfile() = UserProfile(
+    uid = id,
+    name = getString("name") ?: "",
+    email = getString("email") ?: "",
+    role = getString("role") ?: "",
+    academyId = getString("academyId") ?: "",
+    academyName = getString("academyName") ?: "",
+    teamId = getString("teamId") ?: "",
+    status = getString("status") ?: ""
+)

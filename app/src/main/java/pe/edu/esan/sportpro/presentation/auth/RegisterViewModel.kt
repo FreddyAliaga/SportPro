@@ -1,5 +1,7 @@
 package pe.edu.esan.sportpro.presentation.auth
 
+import android.content.ContentResolver
+import android.net.Uri
 import android.util.Patterns
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -11,11 +13,15 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import pe.edu.esan.sportpro.data.model.AccountStatus
+import pe.edu.esan.sportpro.data.model.AcademyForm
 import pe.edu.esan.sportpro.data.model.Invitation
 import pe.edu.esan.sportpro.data.model.MIN_ACCOUNT_AGE
 import pe.edu.esan.sportpro.data.model.RegisterForm
 import pe.edu.esan.sportpro.data.remote.FirebaseAuthManager
 import pe.edu.esan.sportpro.data.remote.InvitationRepository
+import pe.edu.esan.sportpro.data.model.AcademyFormErrors
+import pe.edu.esan.sportpro.data.model.validateAcademyForm
+import pe.edu.esan.sportpro.presentation.components.compressImageToBase64
 import java.time.LocalDate
 import java.time.Period
 import java.time.format.DateTimeFormatter
@@ -45,7 +51,12 @@ data class RegisterUiState(
     val isLoading: Boolean = false,
     val errorMessage: String? = null,
     val infoMessage: String? = null,
-    val resendSeconds: Int = 0
+    val resendSeconds: Int = 0,
+    // US-002 · "Registrar mi academia": la cuenta ADM se crea sin código, junto con su academia
+    val registeringAcademy: Boolean = false,
+    val academyForm: AcademyForm = AcademyForm(),
+    val academyErrors: AcademyFormErrors = AcademyFormErrors(),
+    val logoLoading: Boolean = false
 )
 
 class RegisterViewModel : ViewModel() {
@@ -57,7 +68,45 @@ class RegisterViewModel : ViewModel() {
 
     // ---------- Paso 1: código de invitación ----------
     fun onCodeChange(value: String) {
-        _uiState.update { it.copy(code = value.uppercase().take(12), codeError = null, invitation = null) }
+        _uiState.update {
+            it.copy(code = value.uppercase().take(12), codeError = null, invitation = null, registeringAcademy = false)
+        }
+    }
+
+    // ---------- US-002 · Paso 1 del ADM: datos de la academia (aún no se guarda nada) ----------
+    fun startAcademyRegistration() {
+        cooldownJob?.cancel()
+        _uiState.value = RegisterUiState(registeringAcademy = true)
+    }
+
+    fun onAcademyFormChange(form: AcademyForm) {
+        _uiState.update { it.copy(academyForm = form, academyErrors = AcademyFormErrors(), errorMessage = null) }
+    }
+
+    // Comprime el logo elegido a 150 KB o menos (fuera del hilo principal) y lo guarda en el formulario
+    fun onLogoPicked(resolver: ContentResolver, uri: Uri) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(logoLoading = true, errorMessage = null) }
+            try {
+                val base64 = compressImageToBase64(resolver, uri)
+                _uiState.update { it.copy(logoLoading = false, academyForm = it.academyForm.copy(logoBase64 = base64)) }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(logoLoading = false, errorMessage = "No pudimos usar esa imagen. Prueba con otra.") }
+            }
+        }
+    }
+
+    fun validateAcademy(onValid: () -> Unit) {
+        val errors = validateAcademyForm(_uiState.value.academyForm)
+        _uiState.update { it.copy(academyErrors = errors) }
+        if (!errors.hasErrors) onValid()
+    }
+
+    // Quien registra una academia también debe tener 18 años o más (RN-003)
+    fun showAdminMinorError() {
+        _uiState.update {
+            it.copy(formErrors = it.formErrors.copy(birthDate = "Debes tener 18 años o más para registrar una academia."))
+        }
     }
 
     fun validateCode() {
@@ -105,7 +154,8 @@ class RegisterViewModel : ViewModel() {
     // ---------- Paso 3: crear la cuenta ----------
     fun createAccount(onSuccess: () -> Unit) {
         val state = _uiState.value
-        val invitation = state.invitation ?: return
+        val invitation = state.invitation
+        if (invitation == null && !state.registeringAcademy) return
         val age = ageFrom(state.form.birthDate) ?: return
         if (isMinor(age)) return
         if (!state.termsAccepted) {
@@ -115,7 +165,12 @@ class RegisterViewModel : ViewModel() {
 
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
-            val result = FirebaseAuthManager.registerWithInvitation(state.form, invitation)
+            val result = if (invitation != null) {
+                FirebaseAuthManager.registerWithInvitation(state.form, invitation)
+            } else {
+                // US-002: cuenta ADM + academia nueva
+                FirebaseAuthManager.registerAcademyAdmin(state.form, state.academyForm.toAcademy())
+            }
             _uiState.update { it.copy(isLoading = false, errorMessage = result.exceptionOrNull()?.message) }
             if (result.isSuccess) {
                 startResendCooldown()

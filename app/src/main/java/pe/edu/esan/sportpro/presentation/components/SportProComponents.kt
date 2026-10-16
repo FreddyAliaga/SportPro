@@ -3,6 +3,7 @@ package pe.edu.esan.sportpro.presentation.components
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -60,6 +62,7 @@ import pe.edu.esan.sportpro.ui.theme.SuperficieSuave
 import pe.edu.esan.sportpro.ui.theme.Tarjeta
 import pe.edu.esan.sportpro.ui.theme.TextoPrincipal
 import pe.edu.esan.sportpro.ui.theme.TextoSecundario
+import pe.edu.esan.sportpro.ui.theme.TextoSobreSuave
 import pe.edu.esan.sportpro.ui.theme.Turquesa
 
 // Contenedor común de las pantallas: fondo turquesa claro, márgenes y scroll
@@ -316,4 +319,61 @@ fun InitialsBadge(initials: String, size: Dp = 48.dp) {
     ) {
         Text(initials, color = Tarjeta, fontWeight = FontWeight.Black, fontSize = 16.sp)
     }
+}
+
+// Chip de estado (ej. "Pendiente", "Usado", "Activa")
+@Composable
+fun StatusChip(text: String, background: androidx.compose.ui.graphics.Color, textColor: androidx.compose.ui.graphics.Color) {
+    Text(
+        text,
+        color = textColor,
+        fontWeight = FontWeight.ExtraBold,
+        fontSize = 12.sp,
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(background)
+            .padding(horizontal = 10.dp, vertical = 4.dp)
+    )
+}
+
+// Píldora seleccionable para pestañas y filtros (área táctil de 44 dp)
+@Composable
+fun SelectablePill(text: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Box(
+        modifier = modifier
+            .heightIn(min = 44.dp)
+            .clip(RoundedCornerShape(50))
+            .background(if (selected) Turquesa else Tarjeta)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text,
+            color = if (selected) Tarjeta else TextoSobreSuave,
+            fontWeight = FontWeight.ExtraBold,
+            fontSize = 14.sp
+        )
+    }
+}
+
+// Enlace de texto turquesa (ej. "Anular", "Cambiar DT") con área táctil de 44 dp
+@Composable
+fun TextLink(text: String, color: androidx.compose.ui.graphics.Color = Turquesa, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .heightIn(min = 44.dp)
+            .clip(RoundedCornerShape(50))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(text, color = color, fontWeight = FontWeight.ExtraBold, fontSize = 15.sp)
+    }
+}
+
+// Título de sección en mayúsculas (ej. "SUB-12")
+@Composable
+fun SectionLabel(text: String) {
+    Text(text.uppercase(), fontSize = 14.sp, fontWeight = FontWeight.ExtraBold, color = TextoSobreSuave)
 }

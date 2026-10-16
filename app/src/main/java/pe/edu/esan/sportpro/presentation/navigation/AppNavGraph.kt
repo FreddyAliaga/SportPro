@@ -4,11 +4,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import pe.edu.esan.sportpro.presentation.academy.AcademyFormScreen
+import pe.edu.esan.sportpro.presentation.academy.AcademyTeamsScreen
+import pe.edu.esan.sportpro.presentation.academy.AcademyViewModel
+import pe.edu.esan.sportpro.presentation.academy.InviteCoachScreen
+import pe.edu.esan.sportpro.presentation.academy.TeamFormScreen
+import pe.edu.esan.sportpro.presentation.academy.UsersInvitationsScreen
 import pe.edu.esan.sportpro.presentation.auth.CreateAccountScreen
 import pe.edu.esan.sportpro.presentation.auth.ForgotPasswordScreen
 import pe.edu.esan.sportpro.presentation.auth.InvitationCodeScreen
@@ -29,9 +36,12 @@ fun AppNavGraph() {
     // US-001: un ViewModel para el registro y otro para el inicio de sesión y la sesión
     val registerViewModel: RegisterViewModel = viewModel()
     val loginViewModel: LoginViewModel = viewModel()
+    // US-002: academia, equipos, usuarios e invitaciones del ADM
+    val academyViewModel: AcademyViewModel = viewModel()
 
     // Cierra la sesión y vuelve a la bienvenida sin dejar pantallas en el historial
     val signOut: () -> Unit = {
+        academyViewModel.stop()
         loginViewModel.signOut()
         registerViewModel.signOutAndReset()
         navController.goTo("welcome")
@@ -54,7 +64,10 @@ fun AppNavGraph() {
         composable("welcome") {
             WelcomeScreen(
                 onHaveCode = { navController.navigate("invitation_code") },
-                onRegisterAcademy = { navController.navigate("register_academy") },
+                onRegisterAcademy = {
+                    registerViewModel.startAcademyRegistration()
+                    navController.navigate("register_academy")
+                },
                 onLogin = { navController.navigate("login") }
             )
         }
@@ -71,7 +84,11 @@ fun AppNavGraph() {
             CreateAccountScreen(
                 viewModel = registerViewModel,
                 onBack = { navController.popBackStack() },
-                onMinor = { navController.navigate("minor_blocked") },
+                onMinor = {
+                    // Quien registra una academia ve el error en el formulario; los demás, la pantalla de menor de edad
+                    if (registerViewModel.uiState.value.registeringAcademy) registerViewModel.showAdminMinorError()
+                    else navController.navigate("minor_blocked")
+                },
                 onAccountCreated = { navController.goTo("verify_email") }
             )
         }
@@ -124,7 +141,13 @@ fun AppNavGraph() {
             val state by loginViewModel.uiState.collectAsState()
             HomeScreen(
                 profile = state.profile,
-                onOpenSection = { section -> navController.navigate("section/${section.id}") },
+                onOpenSection = { section ->
+                    when (section.id) {
+                        "academia" -> navController.navigate("academy")              // US-002
+                        "invitaciones" -> navController.navigate("academy_users")    // US-002
+                        else -> navController.navigate("section/${section.id}")
+                    }
+                },
                 onMyProfile = { navController.navigate("section/perfil") },
                 onSignOut = signOut
             )
@@ -140,9 +163,94 @@ fun AppNavGraph() {
             ) { navController.popBackStack() }
         }
 
-        // "Registrar mi academia" pertenece a la US-002
+        // ---------- US-002 · Academia y equipos / Usuarios e invitaciones (ADM con sesión) ----------
+        composable("academy") {
+            StartAcademy(loginViewModel, academyViewModel)
+            AcademyTeamsScreen(
+                viewModel = academyViewModel,
+                onBack = { navController.popBackStack() },
+                onEditAcademy = {
+                    academyViewModel.startEditAcademy()
+                    navController.navigate("academy_edit")
+                },
+                onNewTeam = {
+                    academyViewModel.startNewTeam()
+                    navController.navigate("academy_team")
+                },
+                onEditTeam = { team ->
+                    academyViewModel.startEditTeam(team)
+                    navController.navigate("academy_team")
+                },
+                onUsersInvitations = { navController.navigate("academy_users") }
+            )
+        }
+        composable("academy_edit") {
+            StartAcademy(loginViewModel, academyViewModel)
+            val state by academyViewModel.uiState.collectAsState()
+            val resolver = LocalContext.current.contentResolver
+            AcademyFormScreen(
+                title = "Editar academia",
+                subtitle = "Los cambios se ven al instante en toda tu academia.",
+                buttonText = "Guardar cambios",
+                form = state.academyForm,
+                errors = state.academyErrors,
+                verified = state.academy?.verified,
+                logoLoading = state.logoLoading,
+                loading = state.isLoading,
+                errorMessage = state.errorMessage,
+                step = 0,
+                onFormChange = academyViewModel::onAcademyFormChange,
+                onLogoPicked = { uri -> academyViewModel.onLogoPicked(resolver, uri) },
+                onBack = { navController.popBackStack() },
+                onSubmit = {
+                    academyViewModel.saveAcademy {
+                        loginViewModel.loadProfile()   // el menú muestra el nombre nuevo de la academia
+                        navController.popBackStack()
+                    }
+                }
+            )
+        }
+        composable("academy_team") {
+            StartAcademy(loginViewModel, academyViewModel)
+            TeamFormScreen(
+                viewModel = academyViewModel,
+                onBack = { navController.popBackStack() },
+                onSaved = { navController.popBackStack() },
+                onInvitationCreated = { navController.navigate("academy_invite") }
+            )
+        }
+        composable("academy_users") {
+            StartAcademy(loginViewModel, academyViewModel)
+            UsersInvitationsScreen(
+                viewModel = academyViewModel,
+                onBack = { navController.popBackStack() },
+                onInvitationCreated = { navController.navigate("academy_invite") }
+            )
+        }
+        composable("academy_invite") {
+            InviteCoachScreen(viewModel = academyViewModel, onDone = { navController.popBackStack() })
+        }
+
+        // ---------- US-002 · Registrar mi academia (luego sigue "Crea tu cuenta" y "Revisa tu correo") ----------
         composable("register_academy") {
-            ComingSoonScreen("Registrar mi academia", "US-002") { navController.popBackStack() }
+            val state by registerViewModel.uiState.collectAsState()
+            val resolver = LocalContext.current.contentResolver
+            AcademyFormScreen(
+                title = "Registra tu academia",
+                subtitle = "Serás su administrador: podrás crear equipos e invitar a tus entrenadores.",
+                buttonText = "Continuar",
+                form = state.academyForm,
+                errors = state.academyErrors,
+                verified = null,
+                logoLoading = state.logoLoading,
+                loading = false,
+                errorMessage = state.errorMessage,
+                step = 1,
+                onFormChange = registerViewModel::onAcademyFormChange,
+                onLogoPicked = { uri -> registerViewModel.onLogoPicked(resolver, uri) },
+                onBack = { navController.popBackStack() },
+                onSubmit = { registerViewModel.validateAcademy { navController.navigate("create_account") } }
+            )
         }
     }
 }
@@ -152,5 +260,14 @@ private fun NavController.goTo(route: String) {
     navigate(route) {
         popUpTo(graph.id) { inclusive = true }
         launchSingleTop = true
+    }
+}
+
+// US-002: las pantallas del ADM escuchan la academia del perfil con sesión (academyId del UserProfile)
+@Composable
+private fun StartAcademy(loginViewModel: LoginViewModel, academyViewModel: AcademyViewModel) {
+    val profile = loginViewModel.uiState.collectAsState().value.profile
+    LaunchedEffect(profile) {
+        if (profile != null) academyViewModel.start(profile)
     }
 }

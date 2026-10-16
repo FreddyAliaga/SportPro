@@ -1,7 +1,8 @@
 rules_version = '2';
 
 // Reglas de seguridad de Cloud Firestore – SportPro
-// Versión US-001 (registro con código de invitación e inicio de sesión). Se amplían en US-016.
+// US-001 (registro con código de invitación e inicio de sesión)
+// US-002 (academia, equipos, usuarios e invitaciones de DT por el ADM). Se amplían en US-016.
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -13,13 +14,69 @@ service cloud.firestore {
       return getAfter(/databases/$(database)/documents/invitations/$(code)).data;
     }
 
+    // ---------- US-002 ----------
+
+    function userPath(uid) {
+      return /databases/$(database)/documents/users/$(uid);
+    }
+
+    function academyPath(academyId) {
+      return /databases/$(database)/documents/academies/$(academyId);
+    }
+
+    // Perfil de quien hace la petición
+    function myProfile() {
+      return get(userPath(request.auth.uid)).data;
+    }
+
+    // Miembro activo de la academia (ADM, DT, JUG o PAD)
+    function isMemberOf(academyId) {
+      return signedIn()
+        && exists(userPath(request.auth.uid))
+        && myProfile().academyId == academyId
+        && myProfile().status == 'active';
+    }
+
+    // Administrador activo de ESA academia
+    function isAdmOf(academyId) {
+      return isMemberOf(academyId) && myProfile().role == 'ADM';
+    }
+
+    // Datos válidos de una academia (logo: 150 KB en Base64 = 204800 caracteres como máximo)
+    function validAcademy(data) {
+      return data.name is string && data.name.size() >= 3 && data.name.size() <= 80
+        && data.city is string && data.city.size() > 0 && data.city.size() <= 60
+        && data.institutionalEmail is string && data.institutionalEmail.size() <= 100
+        && data.logoBase64 is string && data.logoBase64.size() <= 204800
+        // RN-008: plazos de convocatoria
+        && data.callupNoticeHours is int && data.callupNoticeHours >= 1 && data.callupNoticeHours <= 168
+        && data.callupConfirmHours is int && data.callupConfirmHours >= 0
+        && data.callupConfirmHours < data.callupNoticeHours;
+    }
+
+    // Datos válidos de un equipo (RN-004: categoría de la lista)
+    function validTeam(data) {
+      return data.name is string && data.name.size() >= 2 && data.name.size() <= 40
+        && data.category in ['Sub-8', 'Sub-10', 'Sub-12', 'Sub-15', 'Sub-17', 'Primera', 'Otra']
+        && data.maxStarters is int && data.maxStarters >= 1 && data.maxStarters <= 11
+        && data.maxSubstitutes is int && data.maxSubstitutes >= 0 && data.maxSubstitutes <= 20
+        && data.active is bool;
+    }
+
+    // Un campo que no cambia en la actualización
+    function unchanged(field) {
+      return request.resource.data.get(field, null) == resource.data.get(field, null);
+    }
+
     // Códigos de invitación: el ID del documento es el código.
     match /invitations/{code} {
       // Se puede consultar UN código conocido (para validarlo), pero no listar todos.
       allow get: if true;
-      allow list: if false;
 
-      // Solo se puede marcar como usado una vez, por la persona que se registra,
+      // US-002: el ADM lista los códigos de SU academia (consulta con where academyId == ...)
+      allow list: if signedIn() && isAdmOf(resource.data.academyId);
+
+      // US-001: solo se puede marcar como usado una vez, por la persona que se registra,
       // si no venció ni fue anulado, y cambiando únicamente used / usedBy / usedAt.
       allow update: if signedIn()
         && resource.data.get('used', false) == false
@@ -33,15 +90,40 @@ service cloud.firestore {
         // quien ya tiene perfil no puede gastar otro código
         && !exists(/databases/$(database)/documents/users/$(request.auth.uid));
 
-      // Los crea el ADM o el DT (US-002 y US-003); por ahora solo desde la consola.
-      allow create, delete: if false;
+      // US-002 (RN-002): el ADM anula un código de su academia que aún no se usó.
+      // Anular = status "ANULADO"; no se cambia nada más y el código no se borra.
+      allow update: if signedIn()
+        && isAdmOf(resource.data.academyId)
+        && resource.data.get('used', false) == false
+        && request.resource.data.status == 'ANULADO'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']);
+
+      // US-002: el ADM crea códigos de DT para un equipo de su academia (vencen en 7 días).
+      // Los códigos de apoderado los crea el DT en la US-003.
+      allow create: if signedIn()
+        && isAdmOf(request.resource.data.academyId)
+        && request.resource.data.keys().hasOnly(['academyId', 'academyName', 'city', 'role', 'teamId', 'teamName', 'invitedByName', 'playerId', 'playerName', 'used', 'status', 'createdAt', 'expiresAt', 'createdBy'])
+        && request.resource.data.role == 'DT'
+        && request.resource.data.used == false
+        && request.resource.data.status == 'PENDIENTE'
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.playerId == ''
+        && request.resource.data.playerName == ''
+        && exists(/databases/$(database)/documents/academies/$(request.resource.data.academyId)/teams/$(request.resource.data.teamId))
+        && request.resource.data.expiresAt is timestamp
+        && request.resource.data.expiresAt <= request.time + duration.value(8, 'd');
+
+      // Nunca se borran
+      allow delete: if false;
     }
 
     // Perfil de cada usuario (solo personas de 18 años o más tienen cuenta)
     match /users/{uid} {
-      allow read: if signedIn() && request.auth.uid == uid;
+      // Cada persona lee su perfil; el ADM lee los perfiles de su academia (US-002)
+      allow read: if signedIn()
+        && (request.auth.uid == uid || isAdmOf(resource.data.academyId));
 
-      // Se crea en la misma transacción que marca el código como usado:
+      // US-001: se crea en la misma transacción que marca el código como usado:
       // el rol y la academia deben coincidir con los del código y debe aceptar los términos de uso.
       allow create: if signedIn()
         && request.auth.uid == uid
@@ -63,7 +145,28 @@ service cloud.firestore {
         && request.resource.data.teamId == invitationAfter(request.resource.data.invitationCode).get('teamId', '')
         && request.resource.data.playerId == invitationAfter(request.resource.data.invitationCode).get('playerId', '');
 
-      // Tras verificar el correo, la cuenta pasa de "pending_verification" a "active".
+      // US-002: "Registrar mi academia". El perfil ADM se crea SIN código, en la misma
+      // transacción que crea su academia (nueva) con adminUid = su uid.
+      allow create: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['name', 'email', 'phoneNumber', 'birthDate', 'invitationCode', 'role', 'academyId', 'academyName', 'teamId', 'playerId', 'status', 'termsAccepted', 'createdAt'])
+        && request.resource.data.status == 'pending_verification'
+        && request.resource.data.termsAccepted.version is string
+        // RN-003: misma regla de edad que arriba
+        && request.resource.data.birthDate is timestamp
+        && request.resource.data.birthDate <= request.time - duration.value(6573, 'd')
+        && request.resource.data.role == 'ADM'
+        && request.resource.data.invitationCode == ''
+        && request.resource.data.teamId == ''
+        && request.resource.data.playerId == ''
+        && request.resource.data.academyId is string
+        // la academia es nueva (no existía) y queda creada en esta misma operación, a su nombre
+        && !exists(academyPath(request.resource.data.academyId))
+        && existsAfter(academyPath(request.resource.data.academyId))
+        && getAfter(academyPath(request.resource.data.academyId)).data.adminUid == request.auth.uid
+        && request.resource.data.academyName == getAfter(academyPath(request.resource.data.academyId)).data.name;
+
+      // US-001: tras verificar el correo, la cuenta pasa de "pending_verification" a "active".
       allow update: if signedIn()
         && request.auth.uid == uid
         && request.auth.token.email_verified == true
@@ -71,7 +174,69 @@ service cloud.firestore {
         && request.resource.data.status == 'active'
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']);
 
+      // US-002: el ADM actualiza perfiles de SU academia, solo estos campos:
+      //  - status: active <-> inactive (desactivar/reactivar), nunca el suyo
+      //    ni el de cuentas bloqueadas o sin verificar
+      //  - teamId: el DT de un equipo ("" = sin equipo, o un equipo de la academia)
+      //  - academyName: la copia del nombre cuando se renombra la academia
+      allow update: if signedIn()
+        && isAdmOf(resource.data.academyId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'teamId', 'academyName'])
+        && (unchanged('status') || (
+              request.auth.uid != uid
+              && resource.data.status in ['active', 'inactive']
+              && request.resource.data.status in ['active', 'inactive']))
+        && (unchanged('teamId') || (
+              resource.data.role == 'DT'
+              && (request.resource.data.teamId == ''
+                  || existsAfter(/databases/$(database)/documents/academies/$(resource.data.academyId)/teams/$(request.resource.data.teamId)))))
+        && (unchanged('academyName')
+              || request.resource.data.academyName == getAfter(academyPath(resource.data.academyId)).data.name);
+
+      // Nunca se borran (desactivar = status "inactive")
       allow delete: if false;
+    }
+
+    // US-002: academias
+    match /academies/{academyId} {
+      // La leen los miembros activos de la academia
+      allow read: if isMemberOf(academyId);
+
+      // Solo se crea en el registro del ADM, en la misma transacción que su perfil.
+      // "verified" empieza en false y solo se cambia desde la consola (RN-018).
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['name', 'city', 'institutionalEmail', 'logoBase64', 'callupNoticeHours', 'callupConfirmHours', 'verified', 'adminUid', 'createdAt'])
+        && request.resource.data.adminUid == request.auth.uid
+        && request.resource.data.verified == false
+        && validAcademy(request.resource.data)
+        // quien ya tiene perfil no puede crear otra academia: una cuenta = una academia
+        && !exists(userPath(request.auth.uid))
+        && getAfter(userPath(request.auth.uid)).data.role == 'ADM'
+        && getAfter(userPath(request.auth.uid)).data.academyId == academyId;
+
+      // El ADM edita los datos, sin tocar verified ni adminUid
+      allow update: if isAdmOf(academyId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'city', 'institutionalEmail', 'logoBase64', 'callupNoticeHours', 'callupConfirmHours'])
+        && validAcademy(request.resource.data);
+
+      allow delete: if false;
+
+      // Equipos de la academia (el DT NO se guarda aquí: es el usuario DT con ese teamId)
+      match /teams/{teamId} {
+        allow read: if isMemberOf(academyId);
+
+        allow create: if isAdmOf(academyId)
+          && request.resource.data.keys().hasOnly(['name', 'category', 'maxStarters', 'maxSubstitutes', 'active', 'createdAt'])
+          && request.resource.data.active == true
+          && validTeam(request.resource.data);
+
+        // Editar o desactivar (active = false); nunca se borra
+        allow update: if isAdmOf(academyId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'category', 'maxStarters', 'maxSubstitutes', 'active'])
+          && validTeam(request.resource.data);
+
+        allow delete: if false;
+      }
     }
 
     // Todo lo demás queda cerrado hasta que lo abra su historia de usuario.

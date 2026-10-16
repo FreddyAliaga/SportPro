@@ -70,14 +70,15 @@ fun CreateAccountScreen(
         TopBarWithSteps(onBack = onBack, step = 2)
         Spacer(Modifier.height(28.dp))
         Title("Crea tu cuenta")
-        state.invitation?.let { inv ->
+        val roleLine = when {
+            state.invitation != null ->
+                "${state.invitation!!.roleName.replaceFirstChar { it.uppercase() }} · ${state.invitation!!.academyName}"
+            state.registeringAcademy -> "Administrador · ${state.academyForm.name.trim()}"   // US-002
+            else -> null
+        }
+        roleLine?.let {
             Spacer(Modifier.height(10.dp))
-            Text(
-                "●  ${inv.roleName.replaceFirstChar { it.uppercase() }} · ${inv.academyName}",
-                color = TextoSobreSuave,
-                fontWeight = FontWeight.Bold,
-                fontSize = 14.sp
-            )
+            Text("●  $it", color = TextoSobreSuave, fontWeight = FontWeight.Bold, fontSize = 14.sp)
         }
         Spacer(Modifier.height(20.dp))
 

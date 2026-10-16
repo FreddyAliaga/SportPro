@@ -15,6 +15,7 @@ import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.Source
 import kotlinx.coroutines.tasks.await
 import pe.edu.esan.sportpro.data.model.AccountStatus
+import pe.edu.esan.sportpro.data.model.Academy
 import pe.edu.esan.sportpro.data.model.Invitation
 import pe.edu.esan.sportpro.data.model.RegisterForm
 import pe.edu.esan.sportpro.data.model.TERMS_VERSION
@@ -99,6 +100,78 @@ object FirebaseAuthManager {
             // El perfil ya existe y el código quedó usado: desde aquí ya no se borra la cuenta
             accountCreated = false
             // Firebase envía el correo de verificación; si falla, la persona puede usar "Reenviar enlace"
+            try { user.sendEmailVerification().await() } catch (_: Exception) { }
+            Result.success(Unit)
+
+        } catch (e: Exception) {
+            // Si la cuenta se creó pero falló la transacción, se borra para no dejarla a medias
+            if (accountCreated) {
+                try { auth.currentUser?.delete()?.await() } catch (_: Exception) { }
+            }
+            Result.failure(Exception(friendlyMessage(e)))
+        }
+    }
+
+    // ---------------------------------------------------------------- Registro del ADM (US-002)
+
+    // "Registrar mi academia": crea la cuenta del administrador SIN código de invitación.
+    // La academia y el perfil ADM se crean en la MISMA operación (transacción): no puede quedar
+    // una academia sin administrador ni un ADM sin academia.
+    suspend fun registerAcademyAdmin(form: RegisterForm, academy: Academy): Result<Unit> {
+        var accountCreated = false
+        return try {
+            val birthDate = toTimestamp(form.birthDate)
+
+            // Antes de crear el usuario se revisa que haya conexión con el servidor
+            // (las reglas permiten consultar un código sin sesión; no importa que no exista).
+            // Así, sin internet no se crea nada y no quedan cuentas huérfanas.
+            firestore.collection("invitations").document("CONEXION").get(Source.SERVER).await()
+
+            val authResult = auth.createUserWithEmailAndPassword(form.email.trim(), form.password).await()
+            val user = authResult.user ?: throw Exception("No se pudo crear la cuenta.")
+            accountCreated = true
+            val uid = user.uid
+
+            val academyRef = firestore.collection("academies").document()   // ID automático
+            val userRef = firestore.collection("users").document(uid)
+
+            val academyData = hashMapOf(
+                "name" to academy.name.trim(),
+                "city" to academy.city.trim(),
+                "institutionalEmail" to academy.institutionalEmail.trim(),
+                "logoBase64" to academy.logoBase64,
+                "callupNoticeHours" to academy.callupNoticeHours,
+                "callupConfirmHours" to academy.callupConfirmHours,
+                "verified" to false,   // la verifica el equipo del proyecto desde la consola
+                "adminUid" to uid,
+                "createdAt" to FieldValue.serverTimestamp()
+            )
+            val userData = hashMapOf(
+                "name" to form.fullName.trim(),
+                "email" to form.email.trim(),
+                "phoneNumber" to form.phone.trim(),
+                "birthDate" to birthDate,   // Timestamp: las reglas comprueban que tenga 18 años o más
+                "invitationCode" to "",
+                "role" to "ADM",
+                "academyId" to academyRef.id,
+                "academyName" to academy.name.trim(),
+                "teamId" to "",
+                "playerId" to "",
+                "status" to AccountStatus.PENDING_VERIFICATION,
+                "termsAccepted" to mapOf(
+                    "version" to TERMS_VERSION,
+                    "acceptedAt" to FieldValue.serverTimestamp()
+                ),
+                "createdAt" to FieldValue.serverTimestamp()
+            )
+
+            // Una transacción (y no un batch) porque falla de inmediato si se corta el internet
+            firestore.runTransaction { transaction ->
+                transaction.set(academyRef, academyData)
+                transaction.set(userRef, userData)
+            }.await()
+
+            accountCreated = false
             try { user.sendEmailVerification().await() } catch (_: Exception) { }
             Result.success(Unit)
 
@@ -221,17 +294,6 @@ object FirebaseAuthManager {
 
     fun signOut() = auth.signOut()
 
-    private fun DocumentSnapshot.toUserProfile() = UserProfile(
-        uid = id,
-        name = getString("name") ?: "",
-        email = getString("email") ?: "",
-        role = getString("role") ?: "",
-        academyId = getString("academyId") ?: "",
-        academyName = getString("academyName") ?: "",
-        teamId = getString("teamId") ?: "",
-        status = getString("status") ?: ""
-    )
-
     // El formulario guarda solo dígitos ("14031988"); en Firestore se guarda como Timestamp.
     // Se usa las 12:00 (mediodía) UTC: a las 00:00 UTC, en Lima (UTC-5) se vería el día anterior.
     // Al mediodía UTC cae en el mismo día en cualquier zona horaria de América.
@@ -255,6 +317,22 @@ object FirebaseAuthManager {
         e is FirebaseNetworkException -> NO_CONNECTION_MESSAGE
         // Firestore sin internet (y sin copia guardada en el teléfono)
         e is FirebaseFirestoreException && e.code == FirebaseFirestoreException.Code.UNAVAILABLE -> NO_CONNECTION_MESSAGE
+        // Las reglas de Firestore no permiten la operación
+        e is FirebaseFirestoreException && e.code == FirebaseFirestoreException.Code.PERMISSION_DENIED ->
+            "No tienes permiso para hacer esto. Si crees que es un error, cierra sesión y vuelve a entrar."
         else -> e.message ?: "Ocurrió un error. Inténtalo de nuevo."
     }
 }
+
+// Convierte users/{uid} en UserProfile.
+// Está fuera del object para que también la use AcademyRepository al listar los usuarios de la academia (US-002).
+fun DocumentSnapshot.toUserProfile() = UserProfile(
+    uid = id,
+    name = getString("name") ?: "",
+    email = getString("email") ?: "",
+    role = getString("role") ?: "",
+    academyId = getString("academyId") ?: "",
+    academyName = getString("academyName") ?: "",
+    teamId = getString("teamId") ?: "",
+    status = getString("status") ?: ""
+)

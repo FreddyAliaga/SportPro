@@ -2,6 +2,7 @@ package pe.edu.esan.sportpro.data.remote
 
 import com.google.firebase.FirebaseNetworkException
 import com.google.firebase.FirebaseTooManyRequestsException
+import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseAuthInvalidCredentialsException
 import com.google.firebase.auth.FirebaseAuthInvalidUserException
@@ -10,12 +11,19 @@ import com.google.firebase.auth.FirebaseAuthWeakPasswordException
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreException
+import com.google.firebase.firestore.Source
 import kotlinx.coroutines.tasks.await
 import pe.edu.esan.sportpro.data.model.AccountStatus
 import pe.edu.esan.sportpro.data.model.Invitation
 import pe.edu.esan.sportpro.data.model.RegisterForm
 import pe.edu.esan.sportpro.data.model.TERMS_VERSION
 import pe.edu.esan.sportpro.data.model.UserProfile
+import java.time.LocalDate
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
+import java.time.format.ResolverStyle
+import java.util.Date
 
 // Resultado de iniciar sesión
 enum class SignInOutcome { ACTIVE, NOT_VERIFIED }
@@ -33,6 +41,16 @@ object FirebaseAuthManager {
     suspend fun registerWithInvitation(form: RegisterForm, invitation: Invitation): Result<Unit> {
         var accountCreated = false
         return try {
+            val birthDate = toTimestamp(form.birthDate)
+
+            // Antes de crear el usuario se vuelve a revisar el código EN EL SERVIDOR:
+            // si ya no sirve (o no hay internet) no se crea nada y no quedan cuentas huérfanas.
+            val freshInvitation = firestore.collection("invitations").document(invitation.code)
+                .get(Source.SERVER).await()
+            if (!InvitationRepository.isUsable(freshInvitation)) {
+                throw IllegalStateException(InvitationRepository.INVALID_CODE_MESSAGE)
+            }
+
             val authResult = auth.createUserWithEmailAndPassword(form.email.trim(), form.password).await()
             val user = authResult.user ?: throw Exception("No se pudo crear la cuenta.")
             accountCreated = true
@@ -60,7 +78,7 @@ object FirebaseAuthManager {
                     "name" to form.fullName.trim(),
                     "email" to form.email.trim(),
                     "phoneNumber" to form.phone.trim(),
-                    "birthDate" to toSlashDate(form.birthDate),
+                    "birthDate" to birthDate,   // Timestamp: las reglas comprueban que tenga 18 años o más
                     "invitationCode" to invitation.code,
                     "role" to invitation.role,
                     "academyId" to invitation.academyId,
@@ -214,19 +232,29 @@ object FirebaseAuthManager {
         status = getString("status") ?: ""
     )
 
-    // El formulario guarda solo dígitos ("14031988"); en Firestore se guarda "14/03/1988"
-    private fun toSlashDate(digits: String): String =
-        "${digits.take(2)}/${digits.drop(2).take(2)}/${digits.drop(4)}"
+    // El formulario guarda solo dígitos ("14031988"); en Firestore se guarda como Timestamp.
+    // Se usa las 12:00 (mediodía) UTC: a las 00:00 UTC, en Lima (UTC-5) se vería el día anterior.
+    // Al mediodía UTC cae en el mismo día en cualquier zona horaria de América.
+    // Si alguna vez se convierte de vuelta a fecha, usar también ZoneOffset.UTC.
+    private fun toTimestamp(digits: String): Timestamp {
+        val formatter = DateTimeFormatter.ofPattern("ddMMuuuu").withResolverStyle(ResolverStyle.STRICT)
+        val date = LocalDate.parse(digits, formatter)
+        return Timestamp(Date.from(date.atTime(12, 0).toInstant(ZoneOffset.UTC)))
+    }
+
+    const val NO_CONNECTION_MESSAGE = "No hay conexión a internet. Revísala e inténtalo de nuevo."
 
     // Mensajes claros en español para los errores de Firebase.
     // El orden importa: WeakPassword es un tipo de InvalidCredentials.
-    private fun friendlyMessage(e: Exception): String = when (e) {
-        is FirebaseAuthUserCollisionException -> "Ese correo ya tiene una cuenta en SportPro."
-        is FirebaseAuthWeakPasswordException -> "La contraseña es muy débil."
-        is FirebaseAuthInvalidUserException,
-        is FirebaseAuthInvalidCredentialsException -> "Correo o contraseña incorrectos."
-        is FirebaseTooManyRequestsException -> "Demasiados intentos. Espera unos minutos e inténtalo de nuevo."
-        is FirebaseNetworkException -> "No hay conexión a internet. Revísala e inténtalo de nuevo."
+    fun friendlyMessage(e: Exception): String = when {
+        e is FirebaseAuthUserCollisionException -> "Ese correo ya tiene una cuenta en SportPro."
+        e is FirebaseAuthWeakPasswordException -> "La contraseña es muy débil."
+        e is FirebaseAuthInvalidUserException ||
+            e is FirebaseAuthInvalidCredentialsException -> "Correo o contraseña incorrectos."
+        e is FirebaseTooManyRequestsException -> "Demasiados intentos. Espera unos minutos e inténtalo de nuevo."
+        e is FirebaseNetworkException -> NO_CONNECTION_MESSAGE
+        // Firestore sin internet (y sin copia guardada en el teléfono)
+        e is FirebaseFirestoreException && e.code == FirebaseFirestoreException.Code.UNAVAILABLE -> NO_CONNECTION_MESSAGE
         else -> e.message ?: "Ocurrió un error. Inténtalo de nuevo."
     }
 }

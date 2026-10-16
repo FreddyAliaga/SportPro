@@ -5,7 +5,7 @@ data class RegisterForm(
     val fullName: String = "",
     val email: String = "",
     val phone: String = "",
-    val birthDate: String = "",   // solo dígitos DDMMAAAA (en Firestore se guarda DD/MM/AAAA)
+    val birthDate: String = "",   // solo dígitos DDMMAAAA (en Firestore se guarda como Timestamp)
     val password: String = ""
 )
 

@@ -36,6 +36,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import pe.edu.esan.sportpro.data.model.Invitation
+import pe.edu.esan.sportpro.data.remote.InvitationRepository
 import pe.edu.esan.sportpro.presentation.components.ErrorBox
 import pe.edu.esan.sportpro.presentation.components.InitialsBadge
 import pe.edu.esan.sportpro.presentation.components.PrimaryButton
@@ -93,13 +94,16 @@ fun InvitationCodeScreen(
                 modifier = Modifier.fillMaxWidth()
             )
 
-            if (state.codeError != null) {
-                ErrorBox("${state.codeError} Pide uno nuevo a tu academia o a tu entrenador.")
-                Text(
-                    "Recuerda: cada código se usa una sola vez y vence a los 7 días de generado.",
-                    color = TextoSecundario,
-                    style = MaterialTheme.typography.bodyMedium
-                )
+            state.codeError?.let { error ->
+                ErrorBox(error)
+                // El recordatorio solo tiene sentido si el código realmente no sirve (no si falló la red)
+                if (error == InvitationRepository.INVALID_CODE_MESSAGE) {
+                    Text(
+                        "Recuerda: cada código se usa una sola vez y vence a los 7 días de generado.",
+                        color = TextoSecundario,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
             }
 
             if (invitation != null) {

@@ -11,7 +11,7 @@ object InvitationRepository {
 
     private val firestore = FirebaseFirestore.getInstance()
 
-    const val INVALID_CODE_MESSAGE = "Código no válido o vencido."
+    const val INVALID_CODE_MESSAGE = "Código no válido o vencido. Pide uno nuevo a tu academia o a tu entrenador."
 
     // Normaliza lo que escribe la persona: sin espacios y en mayúsculas
     fun normalize(code: String): String = code.trim().uppercase()
@@ -25,8 +25,11 @@ object InvitationRepository {
             if (!isUsable(snapshot)) throw IllegalArgumentException(INVALID_CODE_MESSAGE)
 
             Result.success(snapshot.toInvitation())
+        } catch (e: IllegalArgumentException) {
+            Result.failure(e)   // el código realmente no sirve
         } catch (e: Exception) {
-            Result.failure(e)
+            // Problema de red u otro error: no se dice que el código es inválido
+            Result.failure(Exception(FirebaseAuthManager.friendlyMessage(e)))
         }
     }
 

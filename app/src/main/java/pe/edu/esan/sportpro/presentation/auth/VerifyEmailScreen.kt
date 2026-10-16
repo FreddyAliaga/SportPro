@@ -7,7 +7,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.MailOutline
@@ -114,7 +116,7 @@ fun VerifyEmailScreen(
             enabled = !state.isLoading
         )
         Spacer(Modifier.height(14.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
             if (state.resendSeconds > 0) {
                 Text("Reenviar enlace en 0:%02d".format(state.resendSeconds), color = TextoSecundario)
             } else {
@@ -122,7 +124,10 @@ fun VerifyEmailScreen(
                     "Reenviar enlace",
                     color = Turquesa,
                     fontWeight = FontWeight.ExtraBold,
-                    modifier = Modifier.clickable { viewModel.resendEmail() }
+                    modifier = Modifier
+                        .heightIn(min = 44.dp)   // área táctil mínima
+                        .clickable { viewModel.resendEmail() }
+                        .wrapContentHeight(Alignment.CenterVertically)
                 )
             }
         }
@@ -134,7 +139,9 @@ fun VerifyEmailScreen(
             textAlign = TextAlign.Center,
             modifier = Modifier
                 .fillMaxWidth()
+                .heightIn(min = 44.dp)   // área táctil mínima
                 .clickable(onClick = onUseOtherAccount)
+                .wrapContentHeight(Alignment.CenterVertically)
         )
     }
 }

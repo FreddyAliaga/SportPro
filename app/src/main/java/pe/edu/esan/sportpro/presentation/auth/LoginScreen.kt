@@ -6,7 +6,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Visibility
@@ -100,10 +102,12 @@ fun LoginScreen(
                 textAlign = TextAlign.End,
                 modifier = Modifier
                     .fillMaxWidth()
+                    .heightIn(min = 44.dp)   // área táctil mínima
                     .clickable {
                         viewModel.startPasswordReset()
                         onForgotPassword()
                     }
+                    .wrapContentHeight(Alignment.CenterVertically)
             )
         }
 
@@ -133,7 +137,9 @@ fun LoginScreen(
             textAlign = TextAlign.Center,
             modifier = Modifier
                 .fillMaxWidth()
+                .heightIn(min = 44.dp)   // área táctil mínima
                 .clickable(onClick = onUseCode)
+                .wrapContentHeight(Alignment.CenterVertically)
         )
     }
 }

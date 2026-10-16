@@ -3,6 +3,8 @@ package pe.edu.esan.sportpro.presentation.auth
 import android.util.Patterns
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,6 +34,8 @@ class LoginViewModel : ViewModel() {
     private val _uiState = MutableStateFlow(LoginUiState())
     val uiState: StateFlow<LoginUiState> = _uiState.asStateFlow()
 
+    private var restoreJob: Job? = null
+
     // ---------- Iniciar sesión ----------
     fun onEmailChange(value: String) {
         _uiState.update { it.copy(email = value, emailError = null, errorMessage = null) }
@@ -52,15 +56,23 @@ class LoginViewModel : ViewModel() {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
             val result = FirebaseAuthManager.signIn(state.email, state.password)
-            _uiState.update { it.copy(isLoading = false, errorMessage = result.exceptionOrNull()?.message) }
             when (result.getOrNull()) {
                 SignInOutcome.ACTIVE -> {
-                    _uiState.update { it.copy(password = "") }
-                    loadProfile()
-                    onActive()
+                    // Se carga el perfil ANTES de ir al inicio, para que el menú ya tenga el rol
+                    val profile = FirebaseAuthManager.loadCurrentProfile()
+                    if (profile.isSuccess) {
+                        _uiState.update { it.copy(isLoading = false, password = "", profile = profile.getOrNull()) }
+                        onActive()
+                    } else {
+                        FirebaseAuthManager.signOut()
+                        _uiState.update { it.copy(isLoading = false, errorMessage = profile.exceptionOrNull()?.message) }
+                    }
                 }
-                SignInOutcome.NOT_VERIFIED -> onNotVerified()
-                null -> Unit   // el error ya se muestra en pantalla
+                SignInOutcome.NOT_VERIFIED -> {
+                    _uiState.update { it.copy(isLoading = false) }
+                    onNotVerified()
+                }
+                null -> _uiState.update { it.copy(isLoading = false, errorMessage = result.exceptionOrNull()?.message) }
             }
         }
     }
@@ -98,15 +110,31 @@ class LoginViewModel : ViewModel() {
             onLoggedOut()
             return
         }
-        viewModelScope.launch {
-            val result = FirebaseAuthManager.loadCurrentProfile()
-            val profile = result.getOrNull()
-            if (profile != null && profile.status == AccountStatus.ACTIVE) {
-                _uiState.update { it.copy(profile = profile) }
-                onLoggedIn()
-            } else {
-                FirebaseAuthManager.signOut()
-                onLoggedOut()
+        restoreJob?.cancel()
+        restoreJob = viewModelScope.launch {
+            var alreadyInHome = false
+            while (true) {
+                val result = FirebaseAuthManager.loadCurrentProfile()
+                if (result.exceptionOrNull()?.message == FirebaseAuthManager.NO_CONNECTION_MESSAGE) {
+                    // Sin internet: NO se cierra la sesión. Entra al inicio (con indicador de carga)
+                    // y se vuelve a intentar cada 5 segundos hasta tener el perfil.
+                    if (!alreadyInHome) {
+                        alreadyInHome = true
+                        onLoggedIn()
+                    }
+                    delay(5000)
+                    continue
+                }
+                val profile = result.getOrNull()
+                // Se cierra la sesión solo si el perfil no existe o la cuenta está bloqueada/desactivada
+                if (profile == null || profile.status == AccountStatus.BLOCKED || profile.status == AccountStatus.INACTIVE) {
+                    FirebaseAuthManager.signOut()
+                    onLoggedOut()
+                } else {
+                    _uiState.update { it.copy(profile = profile) }
+                    if (!alreadyInHome) onLoggedIn()
+                }
+                break
             }
         }
     }
@@ -119,6 +147,7 @@ class LoginViewModel : ViewModel() {
     }
 
     fun signOut() {
+        restoreJob?.cancel()
         FirebaseAuthManager.signOut()
         _uiState.value = LoginUiState()
     }

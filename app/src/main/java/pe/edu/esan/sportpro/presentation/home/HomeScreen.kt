@@ -33,6 +33,7 @@ import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Payments
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.SportsSoccer
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -101,7 +102,7 @@ fun sectionsFor(role: String): List<HomeSection> = when (role) {
         HomeSection("comunidad", "Comunidad", "US-013", Icons.Outlined.Forum),
         HomeSection("notificaciones", "Notificaciones", "US-012", Icons.Outlined.Notifications)
     )
-    else -> listOf( // JUG (mayor de edad)
+    "JUG" -> listOf( // jugador mayor de edad
         HomeSection("convocatorias", "Convocatorias", "US-006", Icons.Outlined.ConfirmationNumber),
         HomeSection("entrenamientos", "Entrenamientos", "US-005", Icons.AutoMirrored.Outlined.EventNote),
         HomeSection("partidos", "Partidos", "US-010", Icons.Outlined.SportsSoccer),
@@ -110,6 +111,7 @@ fun sectionsFor(role: String): List<HomeSection> = when (role) {
         HomeSection("comunidad", "Comunidad", "US-013", Icons.Outlined.Forum),
         HomeSection("notificaciones", "Notificaciones", "US-012", Icons.Outlined.Notifications)
     )
+    else -> emptyList() // rol desconocido o perfil aún sin cargar: no se muestra ninguna sección
 }
 
 // US-001 · Inicio según el rol, con menú lateral (Navigation Drawer)
@@ -200,18 +202,25 @@ fun HomeScreen(
             if (profile != null) RoleChip("${profile.roleName} · ${profile.academyName}")
 
             Spacer(Modifier.height(20.dp))
-            Text("ACCESOS RÁPIDOS", fontSize = 14.sp, fontWeight = FontWeight.ExtraBold, color = TextoSobreSuave)
-            Spacer(Modifier.height(10.dp))
-
-            // Accesos rápidos en 2 columnas (las mismas secciones del menú)
-            sections.chunked(2).forEach { pair ->
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-                    pair.forEach { section ->
-                        QuickTile(section, Modifier.weight(1f)) { onOpenSection(section) }
-                    }
-                    if (pair.size == 1) Spacer(Modifier.weight(1f))
+            if (profile == null) {
+                // Todavía no llega el perfil (por ejemplo, sin internet): indicador de carga
+                Box(Modifier.fillMaxWidth().padding(top = 32.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = Turquesa)
                 }
-                Spacer(Modifier.height(12.dp))
+            } else {
+                Text("ACCESOS RÁPIDOS", fontSize = 14.sp, fontWeight = FontWeight.ExtraBold, color = TextoSobreSuave)
+                Spacer(Modifier.height(10.dp))
+
+                // Accesos rápidos en 2 columnas (las mismas secciones del menú)
+                sections.chunked(2).forEach { pair ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                        pair.forEach { section ->
+                            QuickTile(section, Modifier.weight(1f)) { onOpenSection(section) }
+                        }
+                        if (pair.size == 1) Spacer(Modifier.weight(1f))
+                    }
+                    Spacer(Modifier.height(12.dp))
+                }
             }
         }
     }

@@ -29,7 +29,9 @@ service cloud.firestore {
         && request.resource.data.usedBy == request.auth.uid
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['used', 'usedBy', 'usedAt'])
         // el código solo se gasta en la misma transacción que crea el perfil
-        && existsAfter(/databases/$(database)/documents/users/$(request.auth.uid));
+        && existsAfter(/databases/$(database)/documents/users/$(request.auth.uid))
+        // quien ya tiene perfil no puede gastar otro código
+        && !exists(/databases/$(database)/documents/users/$(request.auth.uid));
 
       // Los crea el ADM o el DT (US-002 y US-003); por ahora solo desde la consola.
       allow create, delete: if false;
@@ -46,6 +48,15 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly(['name', 'email', 'phoneNumber', 'birthDate', 'invitationCode', 'role', 'academyId', 'academyName', 'teamId', 'playerId', 'status', 'termsAccepted', 'createdAt'])
         && request.resource.data.status == 'pending_verification'
         && request.resource.data.termsAccepted.version is string
+        // RN-003: solo mayores de 18 años.
+        // La app valida la edad exacta (años cumplidos); esta regla es una segunda barrera.
+        // Se usa 6573 días por dos motivos:
+        //  - 18 años son 6574 o 6575 días según cuántos años bisiestos haya de por medio.
+        //  - La app guarda la fecha a las 12:00 (mediodía) UTC, así que el día del cumpleaños
+        //    en Lima (UTC-5) aún no se completan los días antes de las 7:00 a. m.
+        // Con 6573 nunca se rechaza a quien cumple 18 hoy (a lo mucho deja pasar 1-2 días antes).
+        && request.resource.data.birthDate is timestamp
+        && request.resource.data.birthDate <= request.time - duration.value(6573, 'd')
         && invitationAfter(request.resource.data.invitationCode).usedBy == request.auth.uid
         && request.resource.data.role == invitationAfter(request.resource.data.invitationCode).role
         && request.resource.data.academyId == invitationAfter(request.resource.data.invitationCode).academyId

@@ -58,12 +58,15 @@ private const val MAX_PHOTO_SIDE = 512
 
 // Selector de logo: abre el selector de fotos de Android (no pide permisos) y muestra el logo elegido.
 // La compresión la hace el ViewModel con compressImageToBase64.
+// US-003: también se usa para la foto del jugador (title / removeText).
 @Composable
 fun LogoPicker(
     logoBase64: String,
     loading: Boolean,
     onPicked: (Uri) -> Unit,
-    onRemove: () -> Unit
+    onRemove: () -> Unit,
+    title: String = "Logo de la academia",
+    removeText: String = "Quitar logo"
 ) {
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) onPicked(uri)
@@ -87,19 +90,19 @@ fun LogoPicker(
                 loading -> CircularProgressIndicator(color = Turquesa, strokeWidth = 2.5.dp, modifier = Modifier.size(28.dp))
                 image != null -> Image(
                     bitmap = image,
-                    contentDescription = "Logo de la academia",
+                    contentDescription = title,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.size(96.dp)
                 )
-                else -> Icon(Icons.Outlined.AddAPhoto, contentDescription = "Elegir logo", tint = Turquesa, modifier = Modifier.size(32.dp))
+                else -> Icon(Icons.Outlined.AddAPhoto, contentDescription = "Elegir imagen: $title", tint = Turquesa, modifier = Modifier.size(32.dp))
             }
         }
         Spacer(Modifier.height(8.dp))
-        Text("Logo de la academia", fontWeight = FontWeight.ExtraBold, fontSize = 15.sp, color = TextoPrincipal)
+        Text(title, fontWeight = FontWeight.ExtraBold, fontSize = 15.sp, color = TextoPrincipal)
         Text("Opcional · se comprime a 150 KB", fontSize = 13.sp, color = TextoSecundario)
         if (logoBase64.isNotEmpty() && !loading) {
             Text(
-                "Quitar logo",
+                removeText,
                 color = Turquesa,
                 fontWeight = FontWeight.ExtraBold,
                 textAlign = TextAlign.Center,
@@ -131,6 +134,27 @@ fun AcademyLogo(logoBase64: String, academyName: String, size: Dp = 52.dp) {
             val initials = academyName.trim().split(" ").filter { it.length > 2 }.take(2)
                 .joinToString("") { it.first().uppercase() }
             Text(initials, color = Tarjeta, fontWeight = FontWeight.Black, fontSize = 18.sp)
+        }
+    }
+}
+
+// US-003: foto del jugador (o sus iniciales si no tiene) en un círculo
+@Composable
+fun PlayerAvatar(photoBase64: String, initials: String, size: Dp = 48.dp) {
+    val image = rememberBase64Image(photoBase64)
+    if (image != null) {
+        Image(
+            bitmap = image,
+            contentDescription = "Foto del jugador",
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.size(size).clip(androidx.compose.foundation.shape.CircleShape)
+        )
+    } else {
+        Box(
+            Modifier.size(size).clip(androidx.compose.foundation.shape.CircleShape).background(Turquesa),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(initials, color = Tarjeta, fontWeight = FontWeight.Black, fontSize = (size.value / 3).sp)
         }
     }
 }

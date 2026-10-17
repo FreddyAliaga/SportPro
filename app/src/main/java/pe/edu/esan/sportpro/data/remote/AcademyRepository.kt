@@ -193,7 +193,9 @@ object AcademyRepository {
     }
 
     // "Desactivar equipo": no se borra, solo queda active = false (se conserva su historial).
-    // En la misma operación se anulan sus códigos de DT pendientes y su DT queda sin equipo.
+    // En la misma operación se anulan sus códigos pendientes (de DT y, desde la US-003, también
+    // los de jugador y apoderado) y su DT queda sin equipo. Sus jugadores se quedan en el equipo
+    // (el ADM los puede trasladar desde "Ver plantel").
     // currentCoachUids: DT activos que hoy tienen este equipo.
     suspend fun setTeamActive(
         academyId: String,
@@ -205,7 +207,6 @@ object AcademyRepository {
             // Consulta en el servidor: sin internet falla aquí, antes de escribir nada
             val pendingCodes = if (!active) {
                 invitationsRef.whereEqualTo("academyId", academyId)
-                    .whereEqualTo("role", "DT")
                     .whereEqualTo("teamId", teamId)
                     .get(Source.SERVER).await().documents
                     .filter { it.getBoolean("used") != true && it.getString("status") != InvitationStatus.REVOKED }
@@ -270,15 +271,7 @@ object AcademyRepository {
             )
 
             val code = firestore.runTransaction { transaction ->
-                // Se comprueba que el código no exista (es casi imposible, pero se revisa igual)
-                var chosen: DocumentReference? = null
-                repeat(5) {
-                    if (chosen == null) {
-                        val candidate = invitationsRef.document("$prefix-${randomPart()}")
-                        if (!transaction.get(candidate).exists()) chosen = candidate
-                    }
-                }
-                val ref = chosen ?: throw IllegalStateException("No se pudo generar el código. Inténtalo de nuevo.")
+                val ref = pickFreeCode(transaction, prefix)
                 transaction.set(ref, data)
                 ref.id
             }.await()
@@ -288,8 +281,18 @@ object AcademyRepository {
         }
     }
 
+    // Elige, dentro de una transacción, un código PREFIJO-XXXXXX que aún no exista
+    // (es casi imposible que se repita, pero se revisa igual). También lo usa la US-003.
+    fun pickFreeCode(transaction: Transaction, prefix: String): DocumentReference {
+        repeat(5) {
+            val candidate = invitationsRef.document("$prefix-${randomPart()}")
+            if (!transaction.get(candidate).exists()) return candidate
+        }
+        throw IllegalStateException("No se pudo generar el código. Inténtalo de nuevo.")
+    }
+
     // Texto "invitado por …" de los códigos que crea el ADM (la regla usa el mismo texto)
-    private fun adminInviterName(academyName: String) = "la administración de $academyName"
+    fun adminInviterName(academyName: String) = "la administración de $academyName"
 
     // Anular = status "ANULADO" (RN-002). El código no se borra; un código usado no se puede anular.
     suspend fun revokeInvitation(code: String): Result<Unit> {
@@ -311,6 +314,7 @@ object AcademyRepository {
     // ---------------------------------------------------------------- Código de invitación
 
     // Formato del código: PREFIJO (4 letras A-Z) + "-" + 6 caracteres del alfabeto sin confusiones.
+    // Los códigos JUG/PAD de la US-003 usan el mismo formato (pickFreeCode + codePrefix).
     // Coincide con la regla: code.matches('^[A-Z]{4}-[A-Z2-9]{6}$')
     // Parte al azar: sin caracteres que se confunden (sin I, O, 0 ni 1)
     private const val CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -358,16 +362,20 @@ object AcademyRepository {
         maxSubstitutes = getLong("maxSubstitutes")?.toInt() ?: 12,
         active = getBoolean("active") ?: true
     )
-
-    private fun DocumentSnapshot.toDtInvitation() = DtInvitation(
-        code = id,
-        role = getString("role") ?: "",
-        teamId = getString("teamId") ?: "",
-        teamName = getString("teamName") ?: "",
-        used = getBoolean("used") ?: false,
-        usedBy = getString("usedBy") ?: "",
-        status = getString("status") ?: InvitationStatus.PENDING,
-        createdAt = getTimestamp("createdAt")?.toDate(),
-        expiresAt = getTimestamp("expiresAt")?.toDate()
-    )
 }
+
+// Convierte invitations/{codigo} en DtInvitation.
+// Está fuera del object para que también la use PlayerRepository (códigos JUG/PAD, US-003).
+fun DocumentSnapshot.toDtInvitation() = DtInvitation(
+    code = id,
+    role = getString("role") ?: "",
+    teamId = getString("teamId") ?: "",
+    teamName = getString("teamName") ?: "",
+    playerId = getString("playerId") ?: "",
+    playerName = getString("playerName") ?: "",
+    used = getBoolean("used") ?: false,
+    usedBy = getString("usedBy") ?: "",
+    status = getString("status") ?: InvitationStatus.PENDING,
+    createdAt = getTimestamp("createdAt")?.toDate(),
+    expiresAt = getTimestamp("expiresAt")?.toDate()
+)

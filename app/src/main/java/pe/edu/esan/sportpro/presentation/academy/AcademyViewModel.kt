@@ -298,7 +298,7 @@ class AcademyViewModel : ViewModel() {
         }
     }
 
-    // Al desactivar: se anulan sus códigos de DT pendientes y su DT queda sin equipo (misma operación)
+    // Al desactivar: se anulan sus códigos pendientes (DT, JUG y PAD) y su DT queda sin equipo (misma operación)
     fun setTeamActive(team: Team, active: Boolean, onDone: () -> Unit) {
         val state = _uiState.value
         if (state.isLoading) return   // evita el doble toque

@@ -65,6 +65,7 @@ fun AcademyTeamsScreen(
     onEditAcademy: () -> Unit,
     onNewTeam: () -> Unit,
     onEditTeam: (Team) -> Unit,
+    onOpenRoster: (Team) -> Unit,      // US-003: plantel del equipo
     onUsersInvitations: () -> Unit
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -122,7 +123,8 @@ fun AcademyTeamsScreen(
                     team = team,
                     coaches = state.coachesOf(team.id),
                     onClick = { onEditTeam(team) },
-                    onChangeCoach = { teamForCoach = team }
+                    onChangeCoach = { teamForCoach = team },
+                    onOpenRoster = { onOpenRoster(team) }
                 )
                 Spacer(Modifier.height(12.dp))
             }
@@ -133,7 +135,13 @@ fun AcademyTeamsScreen(
             SectionLabel("Desactivados")
             Spacer(Modifier.height(10.dp))
             state.inactiveTeams.forEach { team ->
-                TeamCard(team = team, coaches = emptyList(), onClick = { onEditTeam(team) }, onChangeCoach = null)
+                TeamCard(
+                    team = team,
+                    coaches = emptyList(),
+                    onClick = { onEditTeam(team) },
+                    onChangeCoach = null,
+                    onOpenRoster = { onOpenRoster(team) }   // para trasladar a sus jugadores
+                )
                 Spacer(Modifier.height(12.dp))
             }
         }
@@ -187,7 +195,8 @@ private fun TeamCard(
     team: Team,
     coaches: List<UserProfile>,
     onClick: () -> Unit,
-    onChangeCoach: (() -> Unit)?     // null en equipos desactivados
+    onChangeCoach: (() -> Unit)?,    // null en equipos desactivados
+    onOpenRoster: () -> Unit         // US-003: "Ver plantel"
 ) {
     Column(
         modifier = Modifier
@@ -230,10 +239,9 @@ private fun TeamCard(
                 fontSize = 13.sp
             )
         }
-        if (onChangeCoach != null) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                TextLink("Cambiar DT", onClick = onChangeCoach)
-            }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            TextLink("Ver plantel", onClick = onOpenRoster)
+            if (onChangeCoach != null) TextLink("Cambiar DT", onClick = onChangeCoach)
         }
     }
 }

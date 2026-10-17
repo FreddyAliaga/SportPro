@@ -95,6 +95,10 @@ object FirebaseAuthManager {
                     "createdAt" to FieldValue.serverTimestamp()
                 )
                 transaction.set(userRef, userData)
+
+                // US-003: en esta MISMA operación, un código PAD agrega al apoderado al jugador
+                // y un código JUG le asigna su cuenta al jugador mayor (y retira a sus apoderados)
+                PlayerRepository.applyInvitationToPlayer(transaction, invitation, uid)
             }.await()
 
             // El perfil ya existe y el código quedó usado: desde aquí ya no se borra la cuenta
@@ -346,7 +350,8 @@ object FirebaseAuthManager {
     // Se usa las 12:00 (mediodía) UTC: a las 00:00 UTC, en Lima (UTC-5) se vería el día anterior.
     // Al mediodía UTC cae en el mismo día en cualquier zona horaria de América.
     // Si alguna vez se convierte de vuelta a fecha, usar también ZoneOffset.UTC.
-    private fun toTimestamp(digits: String): Timestamp {
+    // También lo usa la US-003 para la fecha de nacimiento del jugador.
+    fun toTimestamp(digits: String): Timestamp {
         val formatter = DateTimeFormatter.ofPattern("ddMMuuuu").withResolverStyle(ResolverStyle.STRICT)
         val date = LocalDate.parse(digits, formatter)
         return Timestamp(Date.from(date.atTime(12, 0).toInstant(ZoneOffset.UTC)))
@@ -372,6 +377,9 @@ object FirebaseAuthManager {
         // Las reglas de Firestore no permiten la operación
         e is FirebaseFirestoreException && e.code == FirebaseFirestoreException.Code.PERMISSION_DENIED ->
             "No se pudo completar la operación por permisos. Revisa los datos e inténtalo de nuevo."
+        // Se quiso actualizar un documento que no existe (por ejemplo, el jugador de un código, US-003)
+        e is FirebaseFirestoreException && e.code == FirebaseFirestoreException.Code.NOT_FOUND ->
+            "No encontramos los datos de este código. Pide uno nuevo a tu academia o a tu entrenador."
         else -> e.message ?: "Ocurrió un error. Inténtalo de nuevo."
     }
 }
@@ -386,5 +394,6 @@ fun DocumentSnapshot.toUserProfile() = UserProfile(
     academyId = getString("academyId") ?: "",
     academyName = getString("academyName") ?: "",
     teamId = getString("teamId") ?: "",
+    playerId = getString("playerId") ?: "",
     status = getString("status") ?: ""
 )

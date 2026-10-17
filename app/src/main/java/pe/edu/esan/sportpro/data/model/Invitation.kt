@@ -9,7 +9,7 @@ data class Invitation(
     val teamName: String = "",
     val city: String = "",
     val role: String = "",          // "DT", "JUG" o "PAD"
-    val playerId: String = "",      // solo si role = PAD (jugador que representa)
+    val playerId: String = "",      // role PAD: jugador que representa; role JUG: su propio perfil (US-003)
     val playerName: String = "",
     val invitedByName: String = ""
 ) {

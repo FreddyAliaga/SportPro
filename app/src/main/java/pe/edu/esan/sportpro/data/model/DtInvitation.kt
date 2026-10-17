@@ -2,12 +2,15 @@ package pe.edu.esan.sportpro.data.model
 
 import java.util.Date
 
-// Código de invitación visto por el ADM en "Usuarios e invitaciones" (invitations/{codigo})
+// Código de invitación visto por el ADM en "Usuarios e invitaciones" (invitations/{codigo}).
+// US-003: también se usa para los códigos JUG/PAD de un jugador (playerId / playerName).
 data class DtInvitation(
     val code: String = "",
     val role: String = "",
     val teamId: String = "",
     val teamName: String = "",
+    val playerId: String = "",
+    val playerName: String = "",
     val used: Boolean = false,
     val usedBy: String = "",
     val status: String = InvitationStatus.PENDING,
@@ -36,5 +39,5 @@ object InvitationStatus {
     const val REVOKED = "ANULADO"
 }
 
-// Días que dura un código de invitación de DT
+// Días que dura un código de invitación (de DT, y de jugador o apoderado en la US-003)
 const val INVITATION_VALID_DAYS = 7

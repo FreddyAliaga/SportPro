@@ -2,7 +2,8 @@ rules_version = '2';
 
 // Reglas de seguridad de Cloud Firestore – SportPro
 // US-001 (registro con código de invitación e inicio de sesión)
-// US-002 (academia, equipos, usuarios e invitaciones de DT por el ADM). Se amplían en US-016.
+// US-002 (academia, equipos, usuarios e invitaciones de DT por el ADM).
+// US-003 (plantel y perfil del jugador, códigos JUG/PAD). Se amplían en US-016.
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -72,6 +73,108 @@ service cloud.firestore {
       return request.resource.data.get(field, null) == resource.data.get(field, null);
     }
 
+    // ---------- US-003 ----------
+
+    function playerPath(playerId) {
+      return /databases/$(database)/documents/players/$(playerId);
+    }
+
+    function privatePath(playerId) {
+      return /databases/$(database)/documents/players/$(playerId)/private/data;
+    }
+
+    function invitationPath(code) {
+      return /databases/$(database)/documents/invitations/$(code);
+    }
+
+    // DT activo de ESE equipo (el DT es el usuario con role "DT" y teamId del equipo)
+    function isDtOfTeam(academyId, teamId) {
+      return isMemberOf(academyId) && myProfile().role == 'DT' && myProfile().teamId == teamId;
+    }
+
+    // Gestiona al jugador: el ADM de su academia o el DT de su equipo
+    function canManage(player) {
+      return isAdmOf(player.academyId) || isDtOfTeam(player.academyId, player.teamId);
+    }
+
+    // Su apoderado o el propio jugador mayor de edad (con cuenta)
+    function isFamily(player) {
+      return signedIn()
+        && (request.auth.uid in player.guardianIds
+            || (player.userId != '' && player.userId == request.auth.uid));
+    }
+
+    // Tiene 18 años o más (misma tolerancia de 6573 días que el registro de la US-001)
+    function isAdultBirthDate(birthDate) {
+      return birthDate <= request.time - duration.value(6573, 'd');
+    }
+
+    // Datos deportivos válidos
+    function validPlayer(data) {
+      return data.name is string && data.name.size() >= 3 && data.name.size() <= 60
+        && data.category in ['Sub-8', 'Sub-10', 'Sub-12', 'Sub-15', 'Sub-17', 'Primera', 'Otra']
+        && data.positionMain in ['Portero', 'Defensa central', 'Lateral', 'Mediocampista defensivo', 'Mediocampista', 'Mediocampista ofensivo', 'Extremo', 'Delantero']
+        && data.positionSecondary in ['', 'Portero', 'Defensa central', 'Lateral', 'Mediocampista defensivo', 'Mediocampista', 'Mediocampista ofensivo', 'Extremo', 'Delantero']
+        && (data.dorsal == null || (data.dorsal is int && data.dorsal >= 1 && data.dorsal <= 99))
+        && data.foot in ['Derecho', 'Izquierdo', 'Ambos']
+        && data.isMinor is bool
+        && data.active is bool
+        && data.hasEmergencyContact is bool
+        && data.userId is string
+        && data.guardianIds is list;
+    }
+
+    // Un jugador no puede quedar como "mayor de edad" si su fecha de nacimiento dice que es menor
+    function minorFlagOk(player, privateData) {
+      return player.isMinor == true || isAdultBirthDate(privateData.birthDate);
+    }
+
+    // Datos privados válidos (foto: 150 KB en Base64 = 204800 caracteres como máximo; RN-014)
+    function validPrivate(data) {
+      return data.birthDate is timestamp && data.birthDate < request.time
+        && data.contactPhone is string && (data.contactPhone == '' || data.contactPhone.matches('^9[0-9]{8}$'))
+        && data.emergencyName is string && data.emergencyName.size() <= 60
+        && data.emergencyRelation is string && data.emergencyRelation.size() <= 30
+        && data.emergencyPhone is string && (data.emergencyPhone == '' || data.emergencyPhone.matches('^9[0-9]{8}$'))
+        && data.photoBase64 is string && data.photoBase64.size() <= 204800
+        && (data.heightCm == null || (data.heightCm is int && data.heightCm >= 100 && data.heightCm <= 220))
+        && (data.weightKg == null || (data.weightKg is int && data.weightKg >= 20 && data.weightKg <= 150));
+    }
+
+    // RN-005: contacto de emergencia completo (nombre, parentesco y celular)
+    function emergencyComplete(data) {
+      return data.emergencyName.size() > 0 && data.emergencyRelation.size() > 0 && data.emergencyPhone.size() > 0;
+    }
+
+    // El código se gastó EN ESTA MISMA operación, por quien hace la petición, con ese rol y para ese jugador
+    // (antes no estaba usado y después sí: un código viejo ya usado no sirve para volver a vincularse)
+    function invitationUsedNow(code, role, playerId) {
+      return get(invitationPath(code)).data.get('used', false) == false
+        && getAfter(invitationPath(code)).data.usedBy == request.auth.uid
+        && getAfter(invitationPath(code)).data.role == role
+        && getAfter(invitationPath(code)).data.playerId == playerId;
+    }
+
+    // Código JUG/PAD válido para un jugador (lo crea el DT de su equipo o el ADM de su academia)
+    function validPlayerInvitation(data, playerId) {
+      return canManage(get(playerPath(playerId)).data)
+        && get(playerPath(playerId)).data.active == true
+        && get(playerPath(playerId)).data.userId == ''
+        && data.academyId == get(playerPath(playerId)).data.academyId
+        && data.teamId == get(playerPath(playerId)).data.teamId
+        // PRIVACIDAD: nombre corto ("Mateo R."): cualquiera con el código lo puede leer
+        && data.playerName is string && data.playerName.size() > 0 && data.playerName.size() <= 30
+        && data.invitedByName is string && data.invitedByName.size() > 0 && data.invitedByName.size() <= 80
+        // Lo que ve quien se registra debe coincidir con la academia y el equipo reales
+        && data.academyName == get(academyPath(data.academyId)).data.name
+        && data.city == get(academyPath(data.academyId)).data.city
+        && data.teamName == get(teamPath(data.academyId, data.teamId)).data.name
+        && get(teamPath(data.academyId, data.teamId)).data.active == true
+        // PAD: solo para un menor. JUG: solo si ya tiene 18 años según su fecha de nacimiento real.
+        && ((data.role == 'PAD' && get(playerPath(playerId)).data.isMinor == true)
+            || (data.role == 'JUG' && isAdultBirthDate(get(privatePath(playerId)).data.birthDate)));
+    }
+
     // Códigos de invitación: el ID del documento es el código.
     match /invitations/{code} {
       // Se puede consultar UN código conocido (para validarlo), pero no listar todos.
@@ -79,6 +182,9 @@ service cloud.firestore {
 
       // US-002: el ADM lista los códigos de SU academia (consulta con where academyId == ...)
       allow list: if signedIn() && isAdmOf(resource.data.academyId);
+
+      // US-003: el DT lista los códigos de SU equipo (consulta con where academyId == ... y teamId == ...)
+      allow list: if signedIn() && isDtOfTeam(resource.data.academyId, resource.data.teamId);
 
       // US-001: solo se puede marcar como usado una vez, por la persona que se registra,
       // si no venció ni fue anulado, y cambiando únicamente used / usedBy / usedAt.
@@ -133,6 +239,46 @@ service cloud.firestore {
         && get(teamPath(request.resource.data.academyId, request.resource.data.teamId)).data.active == true
         && request.resource.data.expiresAt is timestamp
         && request.resource.data.expiresAt <= request.time + duration.value(8, 'd');
+
+      // US-003 (RN-002, RN-003): el DT (para jugadores de su equipo) o el ADM (para cualquiera de
+      // su academia) crea un código PAD para el apoderado de un menor o un código JUG para un
+      // jugador que ya tiene 18 años. Vencen en 7 días.
+      allow create: if signedIn()
+        && code.matches('^[A-Z]{4}-[A-Z2-9]{6}$')
+        && request.resource.data.keys().hasOnly(['academyId', 'academyName', 'city', 'role', 'teamId', 'teamName', 'invitedByName', 'playerId', 'playerName', 'used', 'status', 'createdAt', 'expiresAt', 'createdBy'])
+        && request.resource.data.role in ['JUG', 'PAD']
+        && request.resource.data.used == false
+        && request.resource.data.status == 'PENDIENTE'
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.playerId is string
+        && request.resource.data.playerId != ''
+        && validPlayerInvitation(request.resource.data, request.resource.data.playerId)
+        && request.resource.data.expiresAt is timestamp
+        && request.resource.data.expiresAt <= request.time + duration.value(8, 'd');
+
+      // US-003: el DT anula un código JUG/PAD de su equipo que aún no se usó (el ADM ya puede, arriba)
+      allow update: if signedIn()
+        && resource.data.role in ['JUG', 'PAD']
+        && isDtOfTeam(resource.data.academyId, resource.data.teamId)
+        && resource.data.get('used', false) == false
+        && request.resource.data.status == 'ANULADO'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']);
+
+      // US-003: "Vincular otro jugador". Un apoderado que YA tiene cuenta usa un nuevo código PAD
+      // de SU academia. Solo en la misma operación que lo agrega como apoderado de ese jugador.
+      // (La regla de la US-001 de arriba sigue exigiendo que quien se registra no tenga perfil.)
+      allow update: if signedIn()
+        && resource.data.role == 'PAD'
+        && resource.data.get('used', false) == false
+        && resource.data.get('status', 'PENDIENTE') != 'ANULADO'
+        && (!('expiresAt' in resource.data) || request.time < resource.data.expiresAt)
+        && request.resource.data.used == true
+        && request.resource.data.usedBy == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['used', 'usedBy', 'usedAt'])
+        && isMemberOf(resource.data.academyId)
+        && myProfile().role == 'PAD'
+        && request.auth.uid in getAfter(playerPath(resource.data.playerId)).data.guardianIds
+        && getAfter(playerPath(resource.data.playerId)).data.lastInvitationCode == code;
 
       // Nunca se borran
       allow delete: if false;
@@ -258,6 +404,107 @@ service cloud.firestore {
           && validTeam(request.resource.data);
 
         allow delete: if false;
+      }
+    }
+
+    // US-003: jugadores (datos deportivos). Nunca se borran: retirar = active false (RN-004).
+    // Los leen el ADM de la academia, el DT activo de su equipo, sus apoderados y el propio jugador.
+    match /players/{playerId} {
+      allow read: if canManage(resource.data) || isFamily(resource.data);
+
+      // "Nuevo jugador": DT de un equipo ACTIVO o ADM de la academia, en la misma operación
+      // que sus datos privados (fecha de nacimiento). Empieza sin cuenta y sin apoderados.
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['academyId', 'teamId', 'name', 'category', 'positionMain', 'positionSecondary', 'dorsal', 'foot', 'isMinor', 'userId', 'guardianIds', 'hasEmergencyContact', 'active', 'lastInvitationCode', 'createdAt', 'createdBy'])
+        && canManage(request.resource.data)
+        && validPlayer(request.resource.data)
+        && request.resource.data.userId == ''
+        && request.resource.data.guardianIds.size() == 0
+        && request.resource.data.hasEmergencyContact == false
+        && request.resource.data.active == true
+        && request.resource.data.lastInvitationCode == ''
+        && request.resource.data.createdBy == request.auth.uid
+        && get(teamPath(request.resource.data.academyId, request.resource.data.teamId)).data.active == true
+        && existsAfter(privatePath(playerId))
+        && minorFlagOk(request.resource.data, getAfter(privatePath(playerId)).data);
+
+      // DT de su equipo o ADM: datos deportivos, si es menor (con la fecha de nacimiento),
+      // traslado (solo a otro equipo ACTIVO de la MISMA academia) y retirar/reactivar.
+      allow update: if canManage(resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'category', 'positionMain', 'positionSecondary', 'dorsal', 'foot', 'isMinor', 'teamId', 'active'])
+        && validPlayer(request.resource.data)
+        && (unchanged('teamId')
+            || get(teamPath(resource.data.academyId, request.resource.data.teamId)).data.active == true)
+        && (unchanged('isMinor') || minorFlagOk(request.resource.data, getAfter(privatePath(playerId)).data));
+
+      // Apoderado o jugador mayor: solo hasEmergencyContact, y debe coincidir con sus datos privados
+      allow update: if isFamily(resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['hasEmergencyContact'])
+        && request.resource.data.hasEmergencyContact == emergencyComplete(getAfter(privatePath(playerId)).data);
+
+      // Uso de un código PAD (registro US-001 o "Vincular otro jugador"): se agrega a sí mismo
+      // como apoderado, en la misma operación que gasta el código para ESTE jugador.
+      allow update: if signedIn()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['guardianIds', 'lastInvitationCode'])
+        && request.resource.data.guardianIds.toSet() == resource.data.guardianIds.toSet().union([request.auth.uid].toSet())
+        && invitationUsedNow(request.resource.data.lastInvitationCode, 'PAD', playerId);
+
+      // Uso de un código JUG (registro US-001): el jugador mayor asume su cuenta y su gestión;
+      // se retira el vínculo con sus apoderados.
+      allow update: if signedIn()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['userId', 'guardianIds', 'isMinor', 'lastInvitationCode'])
+        && resource.data.userId == ''
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.guardianIds.size() == 0
+        && request.resource.data.isMinor == false
+        && invitationUsedNow(request.resource.data.lastInvitationCode, 'JUG', playerId);
+
+      allow delete: if false;
+
+      // Datos privados: players/{playerId}/private/data (RN-005, RN-014)
+      match /private/{docId} {
+        allow read: if docId == 'data'
+          && (canManage(get(playerPath(playerId)).data) || isFamily(get(playerPath(playerId)).data));
+
+        // Se crea junto con el jugador ("Nuevo jugador")
+        allow create: if docId == 'data'
+          && request.resource.data.keys().hasOnly(['birthDate', 'contactPhone', 'emergencyName', 'emergencyRelation', 'emergencyPhone', 'photoBase64', 'heightCm', 'weightKg'])
+          && !exists(playerPath(playerId))
+          && existsAfter(playerPath(playerId))
+          && canManage(getAfter(playerPath(playerId)).data)
+          && validPrivate(request.resource.data);
+
+        // DT de su equipo o ADM: solo la fecha de nacimiento
+        allow update: if docId == 'data'
+          && canManage(get(playerPath(playerId)).data)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['birthDate'])
+          && validPrivate(request.resource.data);
+
+        // Apoderado o jugador mayor: contacto, emergencia, foto y datos físicos (nunca la fecha de nacimiento)
+        allow update: if docId == 'data'
+          && isFamily(get(playerPath(playerId)).data)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['contactPhone', 'emergencyName', 'emergencyRelation', 'emergencyPhone', 'photoBase64', 'heightCm', 'weightKg'])
+          && validPrivate(request.resource.data);
+
+        allow delete: if false;
+      }
+
+      // Historial del jugador (RN-004): altas, traslados, retiros y reactivaciones.
+      // Lo escribe el DT o el ADM en la misma operación del cambio; nunca se edita ni se borra.
+      match /history/{entryId} {
+        allow read: if canManage(get(playerPath(playerId)).data);
+
+        allow create: if signedIn()
+          && request.resource.data.keys().hasOnly(['type', 'fromTeamId', 'fromTeamName', 'toTeamId', 'toTeamName', 'byUid', 'byName', 'at'])
+          && request.resource.data.type in ['ALTA', 'TRASLADO', 'RETIRO', 'REACTIVACION']
+          && request.resource.data.byUid == request.auth.uid
+          && request.resource.data.at == request.time
+          // quien gestionaba al jugador ANTES del cambio (en un traslado, el DT del equipo anterior);
+          // si el jugador es nuevo, quien lo está creando
+          && ((exists(playerPath(playerId)) && canManage(get(playerPath(playerId)).data))
+              || (!exists(playerPath(playerId)) && canManage(getAfter(playerPath(playerId)).data)));
+
+        allow update, delete: if false;
       }
     }
 

@@ -62,22 +62,26 @@ object PlayerRepository {
     fun historyFlow(playerId: String): Flow<Result<List<PlayerHistoryEntry>>> =
         queryFlow(historyRef(playerId)) { it.toHistoryEntry() }
 
-    // Códigos JUG/PAD de un jugador (DT o ADM). Filtros de igualdad: sin índice compuesto.
+    // Códigos JUG/PAD de un jugador (DT o ADM). Filtros de igualdad e "in": sin índice compuesto.
     fun playerInvitationsFlow(player: Player): Flow<Result<List<DtInvitation>>> =
         queryFlow(playerInvitationsQuery(player)) { it.toDtInvitation() }
 
+    // El filtro por rol es necesario para que las reglas acepten la consulta del DT
+    // (el DT solo lista códigos JUG/PAD de su equipo)
     private fun playerInvitationsQuery(player: Player): Query =
         invitationsRef.whereEqualTo("academyId", player.academyId)
             .whereEqualTo("teamId", player.teamId)
             .whereEqualTo("playerId", player.id)
+            .whereIn("role", listOf("JUG", "PAD"))
 
     // Foto del jugador para la lista del plantel (la foto es un dato privado: está en private/data).
-    // Se lee una vez por jugador; si falla, la lista muestra las iniciales.
-    suspend fun loadPhoto(playerId: String): String =
+    // Se lee una vez por jugador. Devuelve "" si no tiene foto y null si no se pudo leer
+    // (la lista muestra las iniciales y se vuelve a intentar más tarde).
+    suspend fun loadPhoto(playerId: String): String? =
         try {
             privateRef(playerId).get().await().getString("photoBase64") ?: ""
         } catch (_: Exception) {
-            ""
+            null
         }
 
     private fun <T> queryFlow(query: Query, map: (DocumentSnapshot) -> T): Flow<Result<List<T>>> = callbackFlow {
@@ -367,7 +371,7 @@ object PlayerRepository {
             }.await()
             Result.success(Unit)
         } catch (e: Exception) {
-            Result.failure(Exception(FirebaseAuthManager.friendlyMessage(e)))
+            Result.failure(Exception(FirebaseAuthManager.codeUseMessage(e, invitation)))
         }
     }
 

@@ -61,7 +61,9 @@ Están como issues #1 a #16 en el GitHub Project **"SportPro – Historias de Us
 - Osmar: US-004 Mensualidades · US-006 Convocatoria y alineación · US-011 Estadísticas · US-014 Avisos de pruebas.
 
 ## Datos de prueba en Firestore (`invitations`)
-- `HALC-7K2P`: apoderado (PAD) de "Mateo R.", Academia Los Halcones, Sub-12 A.
+- Los códigos se crean desde la app: los de DT, el ADM en "Usuarios e invitaciones" (US-002); los PAD/JUG, el DT o el ADM
+  en el perfil del jugador ("Nuevo jugador" → "Invitar apoderado" / "Invitar jugador", US-003).
+- `HALC-7K2P` (creado a mano antes de la US-003) **ya no sirve**: apunta a un jugador que no existe en `players`.
 - Campos de un código: academyId, academyName, teamId, teamName, city, role, playerId?, playerName?, invitedByName, used, usedBy?, usedAt?, expiresAt?, status? ("ANULADO" lo invalida).
 
 ## Agente revisor

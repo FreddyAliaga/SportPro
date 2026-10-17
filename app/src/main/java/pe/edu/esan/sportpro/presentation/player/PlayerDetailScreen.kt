@@ -288,8 +288,20 @@ private fun ManagerSection(
             Spacer(Modifier.height(12.dp))
         }
         SecondaryButton("Retirar jugador", onRetire, enabled = !state.isLoading)
-    } else {
+    } else if (state.teams.firstOrNull { it.id == player.teamId }?.active == true) {
         SecondaryButton("Reactivar jugador", onReactivate, enabled = !state.isLoading)
+    } else {
+        // La regla tampoco deja reactivarlo en un equipo desactivado
+        Text(
+            "Su equipo está desactivado: trasládalo a un equipo activo para reactivarlo.",
+            color = ErrorTexto,
+            fontWeight = FontWeight.Bold,
+            fontSize = 13.sp
+        )
+        if (state.transferTargets.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            SecondaryButton("Trasladar a otro equipo", onTransfer, enabled = !state.isLoading)
+        }
     }
 
     if (state.history.isNotEmpty()) {

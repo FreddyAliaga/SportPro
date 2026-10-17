@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AddAPhoto
@@ -147,11 +148,11 @@ fun PlayerAvatar(photoBase64: String, initials: String, size: Dp = 48.dp) {
             bitmap = image,
             contentDescription = "Foto del jugador",
             contentScale = ContentScale.Crop,
-            modifier = Modifier.size(size).clip(androidx.compose.foundation.shape.CircleShape)
+            modifier = Modifier.size(size).clip(CircleShape)
         )
     } else {
         Box(
-            Modifier.size(size).clip(androidx.compose.foundation.shape.CircleShape).background(Turquesa),
+            Modifier.size(size).clip(CircleShape).background(Turquesa),
             contentAlignment = Alignment.Center
         ) {
             Text(initials, color = Tarjeta, fontWeight = FontWeight.Black, fontSize = (size.value / 3).sp)

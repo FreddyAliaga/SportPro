@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import pe.edu.esan.sportpro.data.model.AccountStatus
 import pe.edu.esan.sportpro.data.model.DtInvitation
 import pe.edu.esan.sportpro.data.model.Player
 import pe.edu.esan.sportpro.data.model.PlayerHistoryEntry
@@ -227,12 +228,17 @@ class PlayerViewModel : ViewModel() {
         ) { state, players -> state.copy(roster = players, rosterLoaded = true) }
     }
 
-    // La foto está en los datos privados: se lee una vez por jugador
+    // La foto está en los datos privados: se lee una vez por jugador.
+    // Si falla, se quita de requestedPhotos para reintentarlo cuando vuelva a llegar la lista.
     private fun loadMissingPhotos(players: List<Player>) {
         players.map { it.id }.filter { requestedPhotos.add(it) }.forEach { id ->
             viewModelScope.launch {
                 val photo = PlayerRepository.loadPhoto(id)
-                _uiState.update { it.copy(photos = it.photos + (id to photo)) }
+                if (photo == null) {
+                    requestedPhotos.remove(id)
+                } else {
+                    _uiState.update { it.copy(photos = it.photos + (id to photo)) }
+                }
             }
         }
     }
@@ -453,6 +459,11 @@ class PlayerViewModel : ViewModel() {
         val state = _uiState.value
         val profile = state.profile ?: return
         if (state.isLoading) return
+        // Las reglas exigen una cuenta activa (correo verificado)
+        if (profile.status != AccountStatus.ACTIVE) {
+            _uiState.update { it.copy(errorMessage = "Verifica tu correo para vincular a otro jugador.") }
+            return
+        }
         if (state.linkCode.isBlank()) {
             _uiState.update { it.copy(errorMessage = "Escribe el código que te dio el DT.") }
             return

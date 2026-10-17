@@ -97,11 +97,13 @@ service cloud.firestore {
       return isAdmOf(player.academyId) || isDtOfTeam(player.academyId, player.teamId);
     }
 
-    // Su apoderado o el propio jugador mayor de edad (con cuenta)
+    // Su apoderado o el propio jugador mayor de edad (con cuenta ACTIVA)
     function isFamily(player) {
       return signedIn()
         && (request.auth.uid in player.guardianIds
-            || (player.userId != '' && player.userId == request.auth.uid));
+            || (player.userId != '' && player.userId == request.auth.uid))
+        && exists(userPath(request.auth.uid))
+        && myProfile().status == 'active';
     }
 
     // Tiene 18 años o más (misma tolerancia de 6573 días que el registro de la US-001)
@@ -183,8 +185,11 @@ service cloud.firestore {
       // US-002: el ADM lista los códigos de SU academia (consulta con where academyId == ...)
       allow list: if signedIn() && isAdmOf(resource.data.academyId);
 
-      // US-003: el DT lista los códigos de SU equipo (consulta con where academyId == ... y teamId == ...)
-      allow list: if signedIn() && isDtOfTeam(resource.data.academyId, resource.data.teamId);
+      // US-003: el DT lista los códigos JUG/PAD de SU equipo
+      // (consulta con where academyId == ..., teamId == ... y role in ['JUG', 'PAD'])
+      allow list: if signedIn()
+        && resource.data.role in ['JUG', 'PAD']
+        && isDtOfTeam(resource.data.academyId, resource.data.teamId);
 
       // US-001: solo se puede marcar como usado una vez, por la persona que se registra,
       // si no venció ni fue anulado, y cambiando únicamente used / usedBy / usedAt.
@@ -435,7 +440,12 @@ service cloud.firestore {
         && validPlayer(request.resource.data)
         && (unchanged('teamId')
             || get(teamPath(resource.data.academyId, request.resource.data.teamId)).data.active == true)
-        && (unchanged('isMinor') || minorFlagOk(request.resource.data, getAfter(privatePath(playerId)).data));
+        && (unchanged('isMinor') || minorFlagOk(request.resource.data, getAfter(privatePath(playerId)).data))
+        // un jugador con cuenta propia no puede volver a ser menor de edad
+        && (resource.data.userId == '' || request.resource.data.isMinor == false)
+        // solo se reactiva si su equipo está activo (si no, primero se traslada)
+        && (unchanged('active') || request.resource.data.active == false
+            || get(teamPath(resource.data.academyId, request.resource.data.teamId)).data.active == true);
 
       // Apoderado o jugador mayor: solo hasEmergencyContact, y debe coincidir con sus datos privados
       allow update: if isFamily(resource.data)
@@ -457,7 +467,9 @@ service cloud.firestore {
         && request.resource.data.userId == request.auth.uid
         && request.resource.data.guardianIds.size() == 0
         && request.resource.data.isMinor == false
-        && invitationUsedNow(request.resource.data.lastInvitationCode, 'JUG', playerId);
+        && invitationUsedNow(request.resource.data.lastInvitationCode, 'JUG', playerId)
+        // la fecha de nacimiento de la cuenta nueva debe ser la del perfil del jugador
+        && getAfter(userPath(request.auth.uid)).data.birthDate == get(privatePath(playerId)).data.birthDate;
 
       allow delete: if false;
 
@@ -475,10 +487,12 @@ service cloud.firestore {
           && validPrivate(request.resource.data);
 
         // DT de su equipo o ADM: solo la fecha de nacimiento
+        // (y "es menor" del jugador debe seguir siendo coherente con la fecha nueva)
         allow update: if docId == 'data'
           && canManage(get(playerPath(playerId)).data)
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['birthDate'])
-          && validPrivate(request.resource.data);
+          && validPrivate(request.resource.data)
+          && minorFlagOk(getAfter(playerPath(playerId)).data, request.resource.data);
 
         // Apoderado o jugador mayor: contacto, emergencia, foto y datos físicos (nunca la fecha de nacimiento)
         allow update: if docId == 'data'
@@ -502,7 +516,23 @@ service cloud.firestore {
           // quien gestionaba al jugador ANTES del cambio (en un traslado, el DT del equipo anterior);
           // si el jugador es nuevo, quien lo está creando
           && ((exists(playerPath(playerId)) && canManage(get(playerPath(playerId)).data))
-              || (!exists(playerPath(playerId)) && canManage(getAfter(playerPath(playerId)).data)));
+              || (!exists(playerPath(playerId)) && canManage(getAfter(playerPath(playerId)).data)))
+          // la entrada debe corresponder al cambio que se hace en esta misma operación
+          && ((request.resource.data.type == 'ALTA'
+                && !exists(playerPath(playerId)) && existsAfter(playerPath(playerId)))
+              || (request.resource.data.type == 'TRASLADO'
+                && exists(playerPath(playerId))
+                && getAfter(playerPath(playerId)).data.teamId != get(playerPath(playerId)).data.teamId
+                && request.resource.data.toTeamId == getAfter(playerPath(playerId)).data.teamId
+                && request.resource.data.fromTeamId == get(playerPath(playerId)).data.teamId)
+              || (request.resource.data.type == 'RETIRO'
+                && exists(playerPath(playerId))
+                && get(playerPath(playerId)).data.active == true
+                && getAfter(playerPath(playerId)).data.active == false)
+              || (request.resource.data.type == 'REACTIVACION'
+                && exists(playerPath(playerId))
+                && get(playerPath(playerId)).data.active == false
+                && getAfter(playerPath(playerId)).data.active == true));
 
         allow update, delete: if false;
       }

@@ -95,6 +95,10 @@ object FirebaseAuthManager {
                     "createdAt" to FieldValue.serverTimestamp()
                 )
                 transaction.set(userRef, userData)
+
+                // US-003: en esta MISMA operación, un código PAD agrega al apoderado al jugador
+                // y un código JUG le asigna su cuenta al jugador mayor (y retira a sus apoderados)
+                PlayerRepository.applyInvitationToPlayer(transaction, invitation, uid)
             }.await()
 
             // El perfil ya existe y el código quedó usado: desde aquí ya no se borra la cuenta
@@ -105,7 +109,7 @@ object FirebaseAuthManager {
 
         } catch (e: Exception) {
             undoAccount(account)
-            Result.failure(Exception(friendlyMessage(e)))
+            Result.failure(Exception(codeUseMessage(e, invitation)))
         }
     }
 
@@ -346,13 +350,32 @@ object FirebaseAuthManager {
     // Se usa las 12:00 (mediodía) UTC: a las 00:00 UTC, en Lima (UTC-5) se vería el día anterior.
     // Al mediodía UTC cae en el mismo día en cualquier zona horaria de América.
     // Si alguna vez se convierte de vuelta a fecha, usar también ZoneOffset.UTC.
-    private fun toTimestamp(digits: String): Timestamp {
+    // También lo usa la US-003 para la fecha de nacimiento del jugador.
+    fun toTimestamp(digits: String): Timestamp {
         val formatter = DateTimeFormatter.ofPattern("ddMMuuuu").withResolverStyle(ResolverStyle.STRICT)
         val date = LocalDate.parse(digits, formatter)
         return Timestamp(Date.from(date.atTime(12, 0).toInstant(ZoneOffset.UTC)))
     }
 
     const val NO_CONNECTION_MESSAGE = "No hay conexión a internet. Revísala e inténtalo de nuevo."
+
+    // US-003: el jugador del código no existe (solo al usar un código: registro y "Vincular otro jugador")
+    const val CODE_DATA_NOT_FOUND_MESSAGE =
+        "No encontramos los datos de este código. Pide uno nuevo a tu academia o a tu entrenador."
+
+    // US-003: con un código JUG, la regla exige que la fecha de nacimiento sea la del perfil del jugador.
+    // La app no puede compararla antes (la fecha del perfil es un dato privado que aún no puede leer).
+    const val JUG_BIRTH_DATE_MISMATCH_MESSAGE =
+        "Tu fecha de nacimiento no coincide con la del perfil del jugador. Revisa la fecha o pide ayuda a tu DT."
+
+    // Mensaje de un error al USAR un código (registro o "Vincular otro jugador")
+    fun codeUseMessage(e: Exception, invitation: Invitation): String = when {
+        e is FirebaseFirestoreException && e.code == FirebaseFirestoreException.Code.NOT_FOUND ->
+            CODE_DATA_NOT_FOUND_MESSAGE
+        e is FirebaseFirestoreException && e.code == FirebaseFirestoreException.Code.PERMISSION_DENIED &&
+            invitation.role == "JUG" && invitation.playerId.isNotEmpty() -> JUG_BIRTH_DATE_MISMATCH_MESSAGE
+        else -> friendlyMessage(e)
+    }
 
     // Cuenta de Auth sin perfil (el registro se cortó a la mitad): se termina registrándose otra vez
     const val INCOMPLETE_REGISTRATION_MESSAGE =
@@ -372,6 +395,9 @@ object FirebaseAuthManager {
         // Las reglas de Firestore no permiten la operación
         e is FirebaseFirestoreException && e.code == FirebaseFirestoreException.Code.PERMISSION_DENIED ->
             "No se pudo completar la operación por permisos. Revisa los datos e inténtalo de nuevo."
+        // Se quiso actualizar un documento que no existe
+        e is FirebaseFirestoreException && e.code == FirebaseFirestoreException.Code.NOT_FOUND ->
+            "No encontramos estos datos. Actualiza e inténtalo de nuevo."
         else -> e.message ?: "Ocurrió un error. Inténtalo de nuevo."
     }
 }
@@ -386,5 +412,6 @@ fun DocumentSnapshot.toUserProfile() = UserProfile(
     academyId = getString("academyId") ?: "",
     academyName = getString("academyName") ?: "",
     teamId = getString("teamId") ?: "",
+    playerId = getString("playerId") ?: "",
     status = getString("status") ?: ""
 )

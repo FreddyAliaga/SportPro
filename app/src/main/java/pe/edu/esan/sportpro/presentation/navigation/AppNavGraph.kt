@@ -29,6 +29,14 @@ import pe.edu.esan.sportpro.presentation.home.ComingSoonScreen
 import pe.edu.esan.sportpro.presentation.home.HomeScreen
 import pe.edu.esan.sportpro.presentation.home.SplashScreen
 import pe.edu.esan.sportpro.presentation.home.sectionsFor
+import pe.edu.esan.sportpro.presentation.player.InvitePlayerScreen
+import pe.edu.esan.sportpro.presentation.player.LinkPlayerScreen
+import pe.edu.esan.sportpro.presentation.player.MyPlayersScreen
+import pe.edu.esan.sportpro.presentation.player.PlayerDetailScreen
+import pe.edu.esan.sportpro.presentation.player.PlayerFormScreen
+import pe.edu.esan.sportpro.presentation.player.PlayerViewModel
+import pe.edu.esan.sportpro.presentation.player.PrivateFormScreen
+import pe.edu.esan.sportpro.presentation.player.RosterScreen
 
 @Composable
 fun AppNavGraph() {
@@ -38,10 +46,13 @@ fun AppNavGraph() {
     val loginViewModel: LoginViewModel = viewModel()
     // US-002: academia, equipos, usuarios e invitaciones del ADM
     val academyViewModel: AcademyViewModel = viewModel()
+    // US-003: plantel y perfil del jugador (DT, ADM, PAD y JUG)
+    val playerViewModel: PlayerViewModel = viewModel()
 
     // Cierra la sesión y vuelve a la bienvenida sin dejar pantallas en el historial
     val signOut: () -> Unit = {
         academyViewModel.stop()
+        playerViewModel.stop()
         loginViewModel.signOut()
         registerViewModel.signOutAndReset()
         navController.goTo("welcome")
@@ -145,10 +156,22 @@ fun AppNavGraph() {
                     when (section.id) {
                         "academia" -> navController.navigate("academy")              // US-002
                         "invitaciones" -> navController.navigate("academy_users")    // US-002
+                        "plantel" -> navController.navigate("roster")                // US-003 (DT)
+                        "jugadores" -> navController.navigate("my_players")          // US-003 (PAD)
                         else -> navController.navigate("section/${section.id}")
                     }
                 },
-                onMyProfile = { navController.navigate("section/perfil") },
+                onMyProfile = {
+                    val profile = state.profile
+                    if (profile?.role == "JUG" && profile.playerId.isNotEmpty()) {
+                        // US-003: el jugador mayor ve y edita su propio perfil de jugador
+                        playerViewModel.start(profile)
+                        playerViewModel.selectPlayer(profile.playerId)
+                        navController.navigate("player_detail")
+                    } else {
+                        navController.navigate("section/perfil")
+                    }
+                },
                 onSignOut = signOut
             )
         }
@@ -180,6 +203,13 @@ fun AppNavGraph() {
                 onEditTeam = { team ->
                     academyViewModel.startEditTeam(team)
                     navController.navigate("academy_team")
+                },
+                onOpenRoster = { team ->
+                    // US-003: el ADM ve el plantel del equipo con las mismas acciones del DT.
+                    // Primero se inicia el ViewModel (si no, start() borraría el equipo elegido).
+                    loginViewModel.uiState.value.profile?.let { playerViewModel.start(it) }
+                    playerViewModel.openTeam(team.id)
+                    navController.navigate("roster")
                 },
                 onUsersInvitations = { navController.navigate("academy_users") }
             )
@@ -231,6 +261,99 @@ fun AppNavGraph() {
             InviteCoachScreen(viewModel = academyViewModel, onDone = { navController.popBackStack() })
         }
 
+        // ---------- US-003 · Plantel y perfil del jugador (DT y ADM) ----------
+        composable("roster") {
+            StartPlayers(loginViewModel, playerViewModel)
+            RosterScreen(
+                viewModel = playerViewModel,
+                onBack = { navController.popBackStack() },
+                onNewPlayer = {
+                    playerViewModel.startNewPlayer()
+                    navController.navigate("player_new")
+                },
+                onOpenPlayer = { player ->
+                    playerViewModel.selectPlayer(player.id)
+                    navController.navigate("player_detail")
+                }
+            )
+        }
+        composable("player_new") {
+            StartPlayers(loginViewModel, playerViewModel)
+            PlayerFormScreen(
+                viewModel = playerViewModel,
+                onBack = { navController.popBackStack() },
+                onSaved = { playerId ->
+                    // Se abre el perfil del jugador nuevo (para invitar a su apoderado) en lugar del formulario
+                    playerViewModel.selectPlayer(playerId)
+                    navController.navigate("player_detail") { popUpTo("player_new") { inclusive = true } }
+                }
+            )
+        }
+        composable("player_detail") {
+            StartPlayers(loginViewModel, playerViewModel)
+            PlayerDetailScreen(
+                viewModel = playerViewModel,
+                onBack = { navController.popBackStack() },
+                onEditSport = {
+                    playerViewModel.startEditSport()
+                    navController.navigate("player_edit")
+                },
+                onInvitationCreated = { navController.navigate("player_invite") },
+                onTransferred = { navController.popBackStack() },
+                // Apoderado o jugador mayor (la pantalla solo muestra "Editar" a ellos)
+                onEditPrivate = {
+                    playerViewModel.startEditPrivate()
+                    navController.navigate("player_private")
+                }
+            )
+        }
+        composable("player_private") {
+            StartPlayers(loginViewModel, playerViewModel)
+            val resolver = LocalContext.current.contentResolver
+            PrivateFormScreen(
+                viewModel = playerViewModel,
+                onPhotoPicked = { uri -> playerViewModel.onPhotoPicked(resolver, uri) },
+                onBack = { navController.popBackStack() },
+                onSaved = { navController.popBackStack() }
+            )
+        }
+
+        // ---------- US-003 · Mis jugadores (PAD) ----------
+        composable("my_players") {
+            StartPlayers(loginViewModel, playerViewModel)
+            MyPlayersScreen(
+                viewModel = playerViewModel,
+                onBack = { navController.popBackStack() },
+                onOpenPlayer = { player ->
+                    playerViewModel.selectPlayer(player.id)
+                    navController.navigate("player_detail")
+                },
+                onLinkPlayer = {
+                    playerViewModel.startLink()
+                    navController.navigate("link_player")
+                }
+            )
+        }
+        composable("link_player") {
+            StartPlayers(loginViewModel, playerViewModel)
+            LinkPlayerScreen(
+                viewModel = playerViewModel,
+                onBack = { navController.popBackStack() },
+                onLinked = { navController.popBackStack() }
+            )
+        }
+        composable("player_edit") {
+            StartPlayers(loginViewModel, playerViewModel)
+            PlayerFormScreen(
+                viewModel = playerViewModel,
+                onBack = { navController.popBackStack() },
+                onSaved = { navController.popBackStack() }
+            )
+        }
+        composable("player_invite") {
+            InvitePlayerScreen(viewModel = playerViewModel, onDone = { navController.popBackStack() })
+        }
+
         // ---------- US-002 · Registrar mi academia (luego sigue "Crea tu cuenta" y "Revisa tu correo") ----------
         composable("register_academy") {
             val state by registerViewModel.uiState.collectAsState()
@@ -269,5 +392,14 @@ private fun StartAcademy(loginViewModel: LoginViewModel, academyViewModel: Acade
     val profile = loginViewModel.uiState.collectAsState().value.profile
     LaunchedEffect(profile) {
         if (profile != null) academyViewModel.start(profile)
+    }
+}
+
+// US-003: las pantallas del jugador escuchan los datos según el perfil con sesión (rol, academia y equipo)
+@Composable
+private fun StartPlayers(loginViewModel: LoginViewModel, playerViewModel: PlayerViewModel) {
+    val profile = loginViewModel.uiState.collectAsState().value.profile
+    LaunchedEffect(profile) {
+        if (profile != null) playerViewModel.start(profile)
     }
 }

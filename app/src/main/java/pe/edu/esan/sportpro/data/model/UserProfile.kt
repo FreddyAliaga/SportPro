@@ -9,6 +9,7 @@ data class UserProfile(
     val academyId: String = "",
     val academyName: String = "",
     val teamId: String = "",
+    val playerId: String = "",      // US-003: perfil de jugador de un JUG (un PAD puede tener varios: no usar para listarlos)
     val status: String = ""
 ) {
     val firstName: String

@@ -160,8 +160,15 @@ private fun InvitationFound(invitation: Invitation) {
             append("Te unirás como ")
             withStyle(SpanStyle(fontWeight = FontWeight.ExtraBold)) { append(invitation.roleName) }
             if (invitation.playerName.isNotBlank()) {
-                append(" de ")
-                withStyle(SpanStyle(fontWeight = FontWeight.ExtraBold)) { append(invitation.playerName) }
+                // US-003: el apoderado "de Mateo R."; el jugador mayor asume su propio perfil
+                if (invitation.role == "JUG") {
+                    append(" (perfil de ")
+                    withStyle(SpanStyle(fontWeight = FontWeight.ExtraBold)) { append(invitation.playerName) }
+                    append(")")
+                } else {
+                    append(" de ")
+                    withStyle(SpanStyle(fontWeight = FontWeight.ExtraBold)) { append(invitation.playerName) }
+                }
             }
             if (invitation.invitedByName.isNotBlank()) append(", invitado por ${invitation.invitedByName}")
             append(".")

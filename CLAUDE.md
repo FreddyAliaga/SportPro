@@ -54,13 +54,16 @@ Responsable de este repositorio: **Freddy Aliaga** (FreddyAliaga). Equipo: Leopo
 ## Historias de usuario (documento de requisitos v3.0, simplificado)
 16 historias (US-001 a US-016, 71 puntos). Cada comportamiento vive en una sola historia; las demás la citan con "(US-XXX)".
 Están como issues #1 a #16 en el GitHub Project **"SportPro – Historias de Usuario"**.
-- Freddy: US-001 Registro e inicio de sesión · US-008 Registro del partido en vivo · US-009 Corrección y anulación con trazabilidad · US-015 Resumen con IA.
-- Leopoldo: US-002 Academia y equipos · US-005 Entrenamientos y asistencia · US-010 Tiempo real · US-013 Comunidad y moderación.
-- Orlando: US-003 Plantel y perfil · US-007 Catálogo de eventos · US-012 Anuncios y notificaciones · US-016 Privacidad y permisos.
+- Freddy: US-001 Registro e inicio de sesión · US-002 Academia y equipos · US-003 Plantel y perfil · US-008 Registro del partido en vivo · US-009 Corrección y anulación con trazabilidad · US-015 Resumen con IA.
+- Leopoldo: US-005 Entrenamientos y asistencia · US-010 Tiempo real · US-013 Comunidad y moderación.
+- Orlando: US-007 Catálogo de eventos · US-012 Anuncios y notificaciones · US-016 Privacidad y permisos.
+- La US-002 (partiendo del trabajo de Leopoldo) y la US-003 las desarrolla Freddy (acordado en octubre 2026).
 - Osmar: US-004 Mensualidades · US-006 Convocatoria y alineación · US-011 Estadísticas · US-014 Avisos de pruebas.
 
 ## Datos de prueba en Firestore (`invitations`)
-- `HALC-7K2P`: apoderado (PAD) de "Mateo R.", Academia Los Halcones, Sub-12 A.
+- Los códigos se crean desde la app: los de DT, el ADM en "Usuarios e invitaciones" (US-002); los PAD/JUG, el DT o el ADM
+  en el perfil del jugador ("Nuevo jugador" → "Invitar apoderado" / "Invitar jugador", US-003).
+- `HALC-7K2P` (creado a mano antes de la US-003) **ya no sirve**: apunta a un jugador que no existe en `players`.
 - Campos de un código: academyId, academyName, teamId, teamName, city, role, playerId?, playerName?, invitedByName, used, usedBy?, usedAt?, expiresAt?, status? ("ANULADO" lo invalida).
 
 ## Agente revisor

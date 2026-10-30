@@ -18,7 +18,13 @@ data class Player(
     val userId: String = "",                     // "" si no tiene cuenta; uid del jugador mayor de edad
     val guardianIds: List<String> = emptyList(), // uid de sus apoderados
     val hasEmergencyContact: Boolean = false,    // la app lo mantiene al guardar los datos privados
-    val active: Boolean = true                   // "Retirar" = false (nunca se borra, RN-004)
+    val active: Boolean = true,                  // "Retirar" = false (nunca se borra, RN-004)
+    // Autorización del apoderado que declara el DT o el ADM al registrar a un menor
+    // (Reglamento D.S. 016-2024-JUS, art. 22). Los jugadores antiguos y los mayores no la tienen.
+    val guardianAuthorization: Boolean = false,
+    val guardianAuthorizationBy: String = "",    // uid de quien la declaró
+    val guardianAuthorizationByName: String = "",// nombre de quien la declaró (para mostrarlo en el perfil)
+    val guardianAuthorizationAt: Date? = null
 ) {
     // RN-005: un menor queda "Pendiente de apoderado" hasta tener apoderado y contacto de emergencia
     val status: PlayerStatus
@@ -88,7 +94,8 @@ data class PlayerSportForm(
     val positionSecondary: String = "",
     val dorsal: String = "",
     val foot: String = PLAYER_FEET.first(),
-    val birthDate: String = ""            // solo dígitos DDMMAAAA (solo la editan el DT o el ADM)
+    val birthDate: String = "",           // solo dígitos DDMMAAAA (solo la editan el DT o el ADM)
+    val guardianAuthorized: Boolean = false   // casilla "Cuento con la autorización del apoderado" (solo menores)
 )
 
 // Datos que el apoderado o el jugador mayor editan

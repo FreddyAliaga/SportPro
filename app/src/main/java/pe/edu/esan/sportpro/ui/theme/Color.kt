@@ -19,6 +19,7 @@ val TextoSobreSuave = Color(0xFF1F3B3C)
 
 val Coral = Color(0xFFFF7A59)          // acento decorativo
 val CoralSuave = Color(0xFFFFE6DF)
+val CoralClaro = Color(0xFFFFF1EC)     // recuadro destacado (casilla de autorización del apoderado)
 val CoralTexto = Color(0xFFB23A1E)
 
 val ErrorBorde = Color(0xFFC2410C)

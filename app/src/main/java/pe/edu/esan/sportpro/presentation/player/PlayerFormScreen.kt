@@ -1,28 +1,44 @@
 package pe.edu.esan.sportpro.presentation.player
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import pe.edu.esan.sportpro.data.model.PLAYER_FEET
 import pe.edu.esan.sportpro.data.model.PLAYER_POSITIONS
+import pe.edu.esan.sportpro.data.model.PrivacyTexts
 import pe.edu.esan.sportpro.data.model.TEAM_CATEGORIES
 import pe.edu.esan.sportpro.data.model.ageFromDigits
 import pe.edu.esan.sportpro.data.model.isMinorAge
+import pe.edu.esan.sportpro.presentation.components.AvisoProteccionDatos
 import pe.edu.esan.sportpro.presentation.components.DateVisualTransformation
 import pe.edu.esan.sportpro.presentation.components.InfoBox
 import pe.edu.esan.sportpro.presentation.components.PrimaryButton
@@ -33,7 +49,12 @@ import pe.edu.esan.sportpro.presentation.components.SportProTextField
 import pe.edu.esan.sportpro.presentation.components.Subtitle
 import pe.edu.esan.sportpro.presentation.components.Title
 import pe.edu.esan.sportpro.presentation.components.TopBarWithSteps
+import pe.edu.esan.sportpro.ui.theme.Coral
+import pe.edu.esan.sportpro.ui.theme.CoralClaro
+import pe.edu.esan.sportpro.ui.theme.ErrorTexto
+import pe.edu.esan.sportpro.ui.theme.Tarjeta
 import pe.edu.esan.sportpro.ui.theme.TextoPrincipal
+import pe.edu.esan.sportpro.ui.theme.Turquesa
 
 // US-003 · Nuevo jugador / Editar datos deportivos (DT o ADM).
 // Datos deportivos + fecha de nacimiento (solo la editan el DT o el ADM): con ella se sabe si es menor.
@@ -92,6 +113,9 @@ fun PlayerFormScreen(
                         fontSize = 14.sp
                     )
                 }
+                if (isMinorAge(age)) {
+                    AvisoProteccionDatos(PrivacyTexts.TITLE_PERSONAL_DATA, PrivacyTexts.NEW_MINOR_PLAYER, compact = true)
+                }
             }
             SportProTextField(
                 value = form.dorsal,
@@ -119,6 +143,16 @@ fun PlayerFormScreen(
             PillGroup("Pie dominante", PLAYER_FEET, form.foot) { viewModel.onSportFormChange(form.copy(foot = it)) }
         }
 
+        // Solo para un menor (nuevo, o un mayor que pasa a menor): sin la casilla no se guarda
+        if (state.needsGuardianAuthorization) {
+            Spacer(Modifier.height(16.dp))
+            GuardianAuthorizationBox(
+                checked = form.guardianAuthorized,
+                error = errors.guardianAuthorization,
+                onCheckedChange = { viewModel.onSportFormChange(form.copy(guardianAuthorized = it)) }
+            )
+        }
+
         PlayerMessages(state)
         Spacer(Modifier.height(20.dp))
         PrimaryButton(
@@ -126,6 +160,40 @@ fun PlayerFormScreen(
             onClick = { viewModel.saveSport(onSaved) },
             loading = state.isLoading
         )
+    }
+}
+
+// Casilla "Cuento con la autorización del apoderado" (Reglamento D.S. 016-2024-JUS, art. 22)
+// en un recuadro coral destacado, con su error debajo
+@Composable
+private fun GuardianAuthorizationBox(checked: Boolean, error: String?, onCheckedChange: (Boolean) -> Unit) {
+    val shape = RoundedCornerShape(14.dp)
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(shape)
+                .background(CoralClaro)
+                .border(1.5.dp, Coral, shape)
+                .clickable { onCheckedChange(!checked) }
+                .padding(end = 14.dp, top = 6.dp, bottom = 6.dp)
+        ) {
+            Checkbox(
+                checked = checked,
+                onCheckedChange = onCheckedChange,
+                colors = CheckboxDefaults.colors(checkedColor = Turquesa, uncheckedColor = Coral, checkmarkColor = Tarjeta)
+            )
+            Text(
+                buildAnnotatedString {
+                    withStyle(SpanStyle(fontWeight = FontWeight.ExtraBold)) { append(PrivacyTexts.GUARDIAN_AUTHORIZATION_BOLD) }
+                    append(PrivacyTexts.GUARDIAN_AUTHORIZATION_REST)
+                },
+                color = TextoPrincipal,
+                fontSize = 14.sp
+            )
+        }
+        error?.let { Text(it, color = ErrorTexto, fontWeight = FontWeight.Bold, fontSize = 13.sp) }
     }
 }
 

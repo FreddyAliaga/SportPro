@@ -35,9 +35,12 @@ import pe.edu.esan.sportpro.data.model.Player
 import pe.edu.esan.sportpro.data.model.PlayerHistoryEntry
 import pe.edu.esan.sportpro.data.model.PlayerHistoryType
 import pe.edu.esan.sportpro.data.model.PlayerPrivate
+import pe.edu.esan.sportpro.data.model.PrivacyTexts
 import pe.edu.esan.sportpro.data.model.Team
 import pe.edu.esan.sportpro.data.model.toBirthText
 import pe.edu.esan.sportpro.presentation.academy.ConfirmDialog
+import pe.edu.esan.sportpro.presentation.components.AvisoProteccionDatos
+import pe.edu.esan.sportpro.presentation.components.EtiquetaProtegido
 import pe.edu.esan.sportpro.presentation.components.ErrorBox
 import pe.edu.esan.sportpro.presentation.components.InfoBox
 import pe.edu.esan.sportpro.presentation.components.PlayerAvatar
@@ -169,9 +172,11 @@ fun PlayerDetailScreen(
 
         // ---------- Datos privados ----------
         Spacer(Modifier.height(20.dp))
-        SectionTitle("Datos privados", if (isFamily) onEditPrivate else null)
+        SectionTitle("Datos privados", if (isFamily) onEditPrivate else null, isProtected = true)
         Spacer(Modifier.height(10.dp))
         PrivateCard(state.playerPrivate, state.playerAge)
+        Spacer(Modifier.height(12.dp))
+        AvisoProteccionDatos(PrivacyTexts.TITLE_PRIVATE_DATA, PrivacyTexts.PLAYER_PRIVATE_DATA, compact = true)
 
         if (state.canManage) {
             ManagerSection(
@@ -206,11 +211,12 @@ private fun HeaderCard(player: Player, photo: String, teamName: String) {
     }
 }
 
-// Título de sección con un enlace "Editar" opcional
+// Título de sección con la etiqueta "Protegido" y un enlace "Editar" opcionales
 @Composable
-private fun SectionTitle(text: String, onEdit: (() -> Unit)?) {
+private fun SectionTitle(text: String, onEdit: (() -> Unit)?, isProtected: Boolean = false) {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
         Box(Modifier.weight(1f)) { SectionLabel(text) }
+        if (isProtected) EtiquetaProtegido(Modifier.padding(start = 8.dp, end = if (onEdit != null) 4.dp else 0.dp))
         if (onEdit != null) TextLink("Editar", onClick = onEdit)
     }
 }
@@ -263,6 +269,16 @@ private fun ManagerSection(
             color = TextoPrincipal,
             style = MaterialTheme.typography.bodyLarge
         )
+        // Autorización del apoderado declarada al registrarlo (los jugadores antiguos no la tienen)
+        val authorizationAt = player.guardianAuthorizationAt
+        if (player.isMinor && player.guardianAuthorization && authorizationAt != null) {
+            val byName = player.guardianAuthorizationByName.ifBlank { "el equipo técnico o la administración" }
+            Text(
+                "Autorización del apoderado declarada por $byName el ${dateFormat.format(authorizationAt)}",
+                color = TextoSecundario,
+                fontSize = 13.sp
+            )
+        }
         val teamActive = state.teams.firstOrNull { it.id == player.teamId }?.active == true
         if (!teamActive && player.active && !player.hasAccount) {
             Text(

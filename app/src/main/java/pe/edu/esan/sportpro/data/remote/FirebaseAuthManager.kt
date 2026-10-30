@@ -18,6 +18,7 @@ import kotlinx.coroutines.tasks.await
 import pe.edu.esan.sportpro.data.model.AccountStatus
 import pe.edu.esan.sportpro.data.model.Academy
 import pe.edu.esan.sportpro.data.model.Invitation
+import pe.edu.esan.sportpro.data.model.PrivacyTexts
 import pe.edu.esan.sportpro.data.model.RegisterForm
 import pe.edu.esan.sportpro.data.model.TERMS_VERSION
 import pe.edu.esan.sportpro.data.model.UserProfile
@@ -394,7 +395,7 @@ object FirebaseAuthManager {
         e is FirebaseFirestoreException && e.code == FirebaseFirestoreException.Code.UNAVAILABLE -> NO_CONNECTION_MESSAGE
         // Las reglas de Firestore no permiten la operación
         e is FirebaseFirestoreException && e.code == FirebaseFirestoreException.Code.PERMISSION_DENIED ->
-            "No se pudo completar la operación por permisos. Revisa los datos e inténtalo de nuevo."
+            PrivacyTexts.PERMISSION_DENIED
         // Se quiso actualizar un documento que no existe
         e is FirebaseFirestoreException && e.code == FirebaseFirestoreException.Code.NOT_FOUND ->
             "No encontramos estos datos. Actualiza e inténtalo de nuevo."

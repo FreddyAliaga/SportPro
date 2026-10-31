@@ -131,6 +131,16 @@ service cloud.firestore {
       return player.isMinor == true || isAdultBirthDate(privateData.birthDate);
     }
 
+    // Autorización del apoderado (Reglamento D.S. 016-2024-JUS, art. 22) declarada EN ESTA operación
+    // por quien la hace (los mayores no tienen estos campos).
+    function guardianAuthorizedNow(data) {
+      return data.get('guardianAuthorization', false) == true
+        && data.get('guardianAuthorizationBy', '') == request.auth.uid
+        && data.get('guardianAuthorizationByName', null) is string
+        && data.guardianAuthorizationByName.size() <= 60
+        && data.get('guardianAuthorizationAt', null) == request.time;
+    }
+
     // Datos privados válidos (foto: 150 KB en Base64 = 204800 caracteres como máximo; RN-014)
     function validPrivate(data) {
       return data.birthDate is timestamp && data.birthDate < request.time
@@ -419,8 +429,12 @@ service cloud.firestore {
 
       // "Nuevo jugador": DT de un equipo ACTIVO o ADM de la academia, en la misma operación
       // que sus datos privados (fecha de nacimiento). Empieza sin cuenta y sin apoderados.
+      // Un menor necesita la autorización del apoderado que declara quien lo registra.
       allow create: if signedIn()
-        && request.resource.data.keys().hasOnly(['academyId', 'teamId', 'name', 'category', 'positionMain', 'positionSecondary', 'dorsal', 'foot', 'isMinor', 'userId', 'guardianIds', 'hasEmergencyContact', 'active', 'lastInvitationCode', 'createdAt', 'createdBy'])
+        && request.resource.data.keys().hasOnly(['academyId', 'teamId', 'name', 'category', 'positionMain', 'positionSecondary', 'dorsal', 'foot', 'isMinor', 'userId', 'guardianIds', 'hasEmergencyContact', 'active', 'lastInvitationCode', 'createdAt', 'createdBy', 'guardianAuthorization', 'guardianAuthorizationBy', 'guardianAuthorizationByName', 'guardianAuthorizationAt'])
+        && (request.resource.data.isMinor == false || guardianAuthorizedNow(request.resource.data))
+        // si se escribe la autorización (también en un mayor), debe ser verdadera, suya y de este momento
+        && (!('guardianAuthorization' in request.resource.data) || guardianAuthorizedNow(request.resource.data))
         && canManage(request.resource.data)
         && validPlayer(request.resource.data)
         && request.resource.data.userId == ''
@@ -436,8 +450,15 @@ service cloud.firestore {
       // DT de su equipo o ADM: datos deportivos, si es menor (con la fecha de nacimiento),
       // traslado (solo a otro equipo ACTIVO de la MISMA academia) y retirar/reactivar.
       allow update: if canManage(resource.data)
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'category', 'positionMain', 'positionSecondary', 'dorsal', 'foot', 'isMinor', 'teamId', 'active'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'category', 'positionMain', 'positionSecondary', 'dorsal', 'foot', 'isMinor', 'teamId', 'active', 'guardianAuthorization', 'guardianAuthorizationBy', 'guardianAuthorizationByName', 'guardianAuthorizationAt'])
         && validPlayer(request.resource.data)
+        // Todo menor queda con la autorización del apoderado (si pasa de mayor a menor, se declara aquí)
+        && (request.resource.data.isMinor == false
+            || request.resource.data.get('guardianAuthorization', false) == true)
+        // La autorización no se borra ni se falsea: si cambia, es verdadera, de quien edita y de este momento
+        && ((unchanged('guardianAuthorization') && unchanged('guardianAuthorizationBy')
+              && unchanged('guardianAuthorizationByName') && unchanged('guardianAuthorizationAt'))
+            || guardianAuthorizedNow(request.resource.data))
         && (unchanged('teamId')
             || get(teamPath(resource.data.academyId, request.resource.data.teamId)).data.active == true)
         && (unchanged('isMinor') || minorFlagOk(request.resource.data, getAfter(privatePath(playerId)).data))

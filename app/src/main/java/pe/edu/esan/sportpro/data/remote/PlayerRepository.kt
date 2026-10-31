@@ -115,10 +115,13 @@ object PlayerRepository {
 
     // "Nuevo jugador": crea el perfil, sus datos privados (fecha de nacimiento) y la primera
     // entrada del historial en la MISMA operación. Devuelve el ID del jugador.
-    // Usar solo con el formulario ya validado.
+    // Si es menor, guarda también la autorización del apoderado que declara quien lo registra
+    // (un mayor no lleva esos campos). Usar solo con el formulario ya validado.
     suspend fun createPlayer(academyId: String, team: Team, form: PlayerSportForm, by: UserProfile): Result<String> {
         return try {
             val ref = playersRef.document()   // ID automático
+            val authorization =
+                if (isMinor(form) && form.guardianAuthorized) guardianAuthorizationData(by) else emptyMap()
             val playerData = hashMapOf<String, Any?>(
                 "academyId" to academyId,
                 "teamId" to team.id,
@@ -129,7 +132,7 @@ object PlayerRepository {
                 "active" to true,
                 "createdAt" to FieldValue.serverTimestamp(),
                 "createdBy" to by.uid
-            ) + sportData(form)
+            ) + sportData(form) + authorization
             val privateData = hashMapOf<String, Any?>(
                 "birthDate" to FirebaseAuthManager.toTimestamp(form.birthDate),
                 "contactPhone" to "",
@@ -153,10 +156,13 @@ object PlayerRepository {
 
     // "Editar datos deportivos" (DT o ADM). La fecha de nacimiento también se guarda aquí:
     // solo la editan el DT o el ADM, y con ella se vuelve a calcular si es menor de edad.
-    suspend fun updateSportData(playerId: String, form: PlayerSportForm): Result<Unit> {
+    // authorizedBy: quien declara la autorización del apoderado cuando el jugador queda como menor
+    // y aún no la tiene (null = no cambia).
+    suspend fun updateSportData(playerId: String, form: PlayerSportForm, authorizedBy: UserProfile? = null): Result<Unit> {
         return try {
+            val authorization = authorizedBy?.let { guardianAuthorizationData(it) } ?: emptyMap()
             firestore.runTransaction { transaction ->
-                transaction.update(playerRef(playerId), sportData(form))
+                transaction.update(playerRef(playerId), sportData(form) + authorization)
                 transaction.update(privateRef(playerId), "birthDate", FirebaseAuthManager.toTimestamp(form.birthDate))
             }.await()
             Result.success(Unit)
@@ -173,7 +179,18 @@ object PlayerRepository {
         "positionSecondary" to form.positionSecondary,
         "dorsal" to form.dorsal.trim().toIntOrNull(),   // null = sin dorsal
         "foot" to form.foot,
-        "isMinor" to isMinorAge(ageFromDigits(form.birthDate) ?: 0)
+        "isMinor" to isMinor(form)
+    )
+
+    private fun isMinor(form: PlayerSportForm) = isMinorAge(ageFromDigits(form.birthDate) ?: 0)
+
+    // Autorización del apoderado (Reglamento D.S. 016-2024-JUS, art. 22): quién la declara y cuándo.
+    // La regla exige que sea quien hace la operación, la hora del servidor y un nombre de 60 caracteres como máximo.
+    private fun guardianAuthorizationData(by: UserProfile): Map<String, Any?> = mapOf(
+        "guardianAuthorization" to true,
+        "guardianAuthorizationBy" to by.uid,
+        "guardianAuthorizationByName" to by.name.trim().take(60),
+        "guardianAuthorizationAt" to FieldValue.serverTimestamp()
     )
 
     // ---------------------------------------------------------------- Datos privados (apoderado o jugador mayor)
@@ -391,7 +408,16 @@ object PlayerRepository {
         userId = getString("userId") ?: "",
         guardianIds = (get("guardianIds") as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
         hasEmergencyContact = getBoolean("hasEmergencyContact") ?: false,
-        active = getBoolean("active") ?: true
+        active = getBoolean("active") ?: true,
+        // Lectura defensiva: si falta el campo, la app no se cae (los mayores no lo tienen)
+        guardianAuthorization = getBoolean("guardianAuthorization") ?: false,
+        guardianAuthorizationBy = getString("guardianAuthorizationBy") ?: "",
+        guardianAuthorizationByName = getString("guardianAuthorizationByName") ?: "",
+        // ESTIMATE: justo al guardar, la hora del servidor aún no llega; se usa la hora estimada del teléfono
+        guardianAuthorizationAt = getTimestamp(
+            "guardianAuthorizationAt",
+            DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+        )?.toDate()
     )
 
     private fun DocumentSnapshot.toPlayerPrivate() = PlayerPrivate(

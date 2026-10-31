@@ -15,6 +15,7 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import pe.edu.esan.sportpro.data.model.PrivacyTexts
 import pe.edu.esan.sportpro.data.model.toBirthText
 import pe.edu.esan.sportpro.presentation.components.InfoBox
 import pe.edu.esan.sportpro.presentation.components.LogoPicker
@@ -27,6 +28,7 @@ import pe.edu.esan.sportpro.presentation.components.Subtitle
 import pe.edu.esan.sportpro.presentation.components.Title
 import pe.edu.esan.sportpro.presentation.components.TopBarWithSteps
 import pe.edu.esan.sportpro.ui.theme.TextoPrincipal
+import pe.edu.esan.sportpro.ui.theme.TextoSecundario
 
 // US-003 · Datos privados que editan el apoderado (de sus jugadores) y el jugador mayor (los suyos):
 // contacto, contacto de emergencia, foto y datos físicos. La fecha de nacimiento solo la editan el DT o el ADM.
@@ -68,6 +70,7 @@ fun PrivateFormScreen(
                         fontSize = 14.sp
                     )
                 }
+                Text(PrivacyTexts.BIRTH_DATE_LOCKED, color = TextoSecundario, fontSize = 12.sp)
             }
             SportProTextField(
                 value = form.contactPhone,

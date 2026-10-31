@@ -36,6 +36,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import pe.edu.esan.sportpro.data.model.PrivacyTexts
+import pe.edu.esan.sportpro.presentation.components.AvisoProteccionDatos
 import pe.edu.esan.sportpro.presentation.components.DateVisualTransformation
 import pe.edu.esan.sportpro.presentation.components.ErrorBox
 import pe.edu.esan.sportpro.presentation.components.PrimaryButton
@@ -118,11 +120,6 @@ fun CreateAccountScreen(
                     modifier = Modifier.weight(1f)
                 )
             }
-            Text(
-                "Usamos tu fecha de nacimiento solo para confirmar que eres mayor de edad.",
-                color = TextoSecundario,
-                style = MaterialTheme.typography.bodyMedium
-            )
             SportProTextField(
                 value = form.password,
                 onValueChange = { viewModel.onFormChange(form.copy(password = it)) },
@@ -175,6 +172,8 @@ fun CreateAccountScreen(
         state.termsError?.let {
             Text(it, color = ErrorTexto, fontWeight = FontWeight.Bold, fontSize = 13.sp)
         }
+        Spacer(Modifier.height(12.dp))
+        AvisoProteccionDatos(PrivacyTexts.TITLE_YOUR_DATA, PrivacyTexts.CREATE_ACCOUNT, compact = true)
         state.errorMessage?.let {
             Spacer(Modifier.height(10.dp))
             ErrorBox(it)

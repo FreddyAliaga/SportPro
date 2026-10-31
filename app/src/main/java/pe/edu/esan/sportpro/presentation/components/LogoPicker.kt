@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import pe.edu.esan.sportpro.data.model.academyInitials
 import pe.edu.esan.sportpro.ui.theme.Borde
 import pe.edu.esan.sportpro.ui.theme.SuperficieSuave
 import pe.edu.esan.sportpro.ui.theme.Tarjeta
@@ -132,9 +133,7 @@ fun AcademyLogo(logoBase64: String, academyName: String, size: Dp = 52.dp) {
             Modifier.size(size).clip(RoundedCornerShape(16.dp)).background(Turquesa),
             contentAlignment = Alignment.Center
         ) {
-            val initials = academyName.trim().split(" ").filter { it.length > 2 }.take(2)
-                .joinToString("") { it.first().uppercase() }
-            Text(initials, color = Tarjeta, fontWeight = FontWeight.Black, fontSize = 18.sp)
+            Text(academyInitials(academyName), color = Tarjeta, fontWeight = FontWeight.Black, fontSize = 18.sp)
         }
     }
 }

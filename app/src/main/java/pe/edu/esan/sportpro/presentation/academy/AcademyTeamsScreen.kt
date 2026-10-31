@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.sp
 import pe.edu.esan.sportpro.data.model.Academy
 import pe.edu.esan.sportpro.data.model.Team
 import pe.edu.esan.sportpro.data.model.UserProfile
+import pe.edu.esan.sportpro.data.model.shortCategory
 import pe.edu.esan.sportpro.presentation.components.AcademyLogo
 import pe.edu.esan.sportpro.presentation.components.ErrorBox
 import pe.edu.esan.sportpro.presentation.components.InfoBox
@@ -213,7 +214,7 @@ private fun TeamCard(
                 Modifier.size(44.dp).clip(RoundedCornerShape(14.dp)).background(SuperficieSuave),
                 contentAlignment = Alignment.Center
             ) {
-                Text(team.name.take(3), fontWeight = FontWeight.Black, fontSize = 13.sp, color = Turquesa)
+                Text(shortCategory(team.category), fontWeight = FontWeight.Black, fontSize = 13.sp, color = Turquesa)
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {

@@ -79,7 +79,8 @@ fun VerifyEmailScreen(
 
         if (!fromLogin) {
             SportProCard {
-                StepLine(done = true, text = "Código de invitación aplicado")
+                // "Registrar mi academia" (ADM, US-002) no usa código
+                StepLine(done = true, text = if (state.registeringAcademy) "Academia registrada" else "Código de invitación aplicado")
                 StepLine(done = true, text = "Términos de uso aceptados")
                 StepLine(done = false, text = "Confirmar correo · pendiente")
             }

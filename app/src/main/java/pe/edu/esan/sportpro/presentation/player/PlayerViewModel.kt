@@ -23,12 +23,15 @@ import pe.edu.esan.sportpro.data.model.PlayerSportForm
 import pe.edu.esan.sportpro.data.model.PlayerStatus
 import pe.edu.esan.sportpro.data.model.Team
 import pe.edu.esan.sportpro.data.model.UserProfile
+import pe.edu.esan.sportpro.data.model.ageFromDigits
 import pe.edu.esan.sportpro.data.model.ageOn
+import pe.edu.esan.sportpro.data.model.isMinorAge
 import pe.edu.esan.sportpro.data.model.categoryOrder
 import pe.edu.esan.sportpro.data.model.toForm
 import pe.edu.esan.sportpro.data.model.toSportForm
 import pe.edu.esan.sportpro.data.model.validatePlayerPrivateForm
 import pe.edu.esan.sportpro.data.model.validatePlayerSportForm
+import pe.edu.esan.sportpro.data.model.withFinalPeriod
 import pe.edu.esan.sportpro.data.remote.AcademyRepository
 import pe.edu.esan.sportpro.data.remote.InvitationRepository
 import pe.edu.esan.sportpro.data.remote.PlayerRepository
@@ -98,6 +101,21 @@ data class PlayerUiState(
 
     val playerAge: Int? get() = playerPrivate?.birthDate?.let { ageOn(it) }
 
+    // Casilla "Cuento con la autorización del apoderado": todo menor debe tenerla. Se pide al registrar
+    // a un menor nuevo o al editar a uno que aún no la tiene (por ejemplo, un mayor que pasa a menor).
+    val needsGuardianAuthorization: Boolean
+        get() {
+            val age = ageFromDigits(sportForm.birthDate) ?: return false
+            return isMinorAge(age) && (editingNew || player?.guardianAuthorization != true)
+        }
+
+    // Al editar a un menor que ya tiene la autorización: se muestra quién la declaró en vez de la casilla
+    val existingGuardianAuthorization: Player?
+        get() {
+            val age = ageFromDigits(sportForm.birthDate) ?: return null
+            val p = player ?: return null
+            return if (!editingNew && isMinorAge(age) && p.guardianAuthorization) p else null
+        }
     // Un menor que ya cumplió 18: el DT le genera un código JUG para el MISMO perfil
     val turnedAdult: Boolean get() = player?.isMinor == true && (playerAge ?: 0) >= 18
 
@@ -327,7 +345,8 @@ class PlayerViewModel : ViewModel() {
         val state = _uiState.value
         val profile = state.profile ?: return
         if (state.isLoading) return   // evita el doble toque
-        val errors = validatePlayerSportForm(state.sportForm)
+        val needsAuthorization = state.needsGuardianAuthorization
+        val errors = validatePlayerSportForm(state.sportForm, requireGuardianAuthorization = needsAuthorization)
         _uiState.update { it.copy(sportErrors = errors) }
         if (errors.hasErrors) return
 
@@ -343,7 +362,9 @@ class PlayerViewModel : ViewModel() {
                 PlayerRepository.createPlayer(profile.academyId, team, state.sportForm, profile)
             } else {
                 val playerId = state.player?.id ?: return@launch
-                PlayerRepository.updateSportData(playerId, state.sportForm).map { playerId }
+                // Si queda como menor sin autorización (p. ej. pasa de mayor a menor), se guarda también
+                val authorizedBy = if (needsAuthorization) profile else null
+                PlayerRepository.updateSportData(playerId, state.sportForm, authorizedBy).map { playerId }
             }
             _uiState.update {
                 it.copy(
@@ -480,7 +501,7 @@ class PlayerViewModel : ViewModel() {
                 it.copy(
                     isLoading = false,
                     errorMessage = result.exceptionOrNull()?.message,
-                    infoMessage = result.getOrNull()?.let { name -> "¡Te encontramos! Ahora también eres apoderado de $name." }
+                    infoMessage = result.getOrNull()?.let { name -> "¡Te encontramos! Ahora también eres ${withFinalPeriod("apoderado de $name")}" }
                 )
             }
             if (result.isSuccess) onLinked()

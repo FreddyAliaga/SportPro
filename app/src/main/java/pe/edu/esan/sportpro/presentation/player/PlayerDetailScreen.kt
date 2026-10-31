@@ -35,9 +35,13 @@ import pe.edu.esan.sportpro.data.model.Player
 import pe.edu.esan.sportpro.data.model.PlayerHistoryEntry
 import pe.edu.esan.sportpro.data.model.PlayerHistoryType
 import pe.edu.esan.sportpro.data.model.PlayerPrivate
+import pe.edu.esan.sportpro.data.model.PrivacyTexts
 import pe.edu.esan.sportpro.data.model.Team
 import pe.edu.esan.sportpro.data.model.toBirthText
+import pe.edu.esan.sportpro.data.model.toLocalDateText
 import pe.edu.esan.sportpro.presentation.academy.ConfirmDialog
+import pe.edu.esan.sportpro.presentation.components.AvisoProteccionDatos
+import pe.edu.esan.sportpro.presentation.components.EtiquetaProtegido
 import pe.edu.esan.sportpro.presentation.components.ErrorBox
 import pe.edu.esan.sportpro.presentation.components.InfoBox
 import pe.edu.esan.sportpro.presentation.components.PlayerAvatar
@@ -57,10 +61,6 @@ import pe.edu.esan.sportpro.ui.theme.TextoPrincipal
 import pe.edu.esan.sportpro.ui.theme.TextoSecundario
 import pe.edu.esan.sportpro.ui.theme.Turquesa
 import pe.edu.esan.sportpro.ui.theme.TurquesaOscuro
-import java.text.SimpleDateFormat
-import java.util.Locale
-
-private val dateFormat = SimpleDateFormat("dd/MM/yyyy", Locale.forLanguageTag("es-PE"))
 
 // US-003 · Perfil del jugador.
 // - DT y ADM: editan los datos deportivos, invitan al apoderado o al jugador, trasladan, retiran y reactivan.
@@ -165,13 +165,17 @@ fun PlayerDetailScreen(
             DataRow("Posición secundaria", player.positionSecondary.ifEmpty { "Ninguna" })
             DataRow("Dorsal", player.dorsal?.toString() ?: "Sin dorsal")
             DataRow("Pie dominante", player.foot)
+            // El apoderado también ve la autorización (DT y ADM la ven en "Cuenta y apoderados")
+            if (!state.canManage && player.isMinor) GuardianAuthorizationLine(player)
         }
 
         // ---------- Datos privados ----------
         Spacer(Modifier.height(20.dp))
-        SectionTitle("Datos privados", if (isFamily) onEditPrivate else null)
+        SectionTitle("Datos privados", if (isFamily) onEditPrivate else null, isProtected = true)
         Spacer(Modifier.height(10.dp))
         PrivateCard(state.playerPrivate, state.playerAge)
+        Spacer(Modifier.height(12.dp))
+        AvisoProteccionDatos(PrivacyTexts.TITLE_PRIVATE_DATA, PrivacyTexts.PLAYER_PRIVATE_DATA, compact = true)
 
         if (state.canManage) {
             ManagerSection(
@@ -206,11 +210,12 @@ private fun HeaderCard(player: Player, photo: String, teamName: String) {
     }
 }
 
-// Título de sección con un enlace "Editar" opcional
+// Título de sección con la etiqueta "Protegido" y un enlace "Editar" opcionales
 @Composable
-private fun SectionTitle(text: String, onEdit: (() -> Unit)?) {
+private fun SectionTitle(text: String, onEdit: (() -> Unit)?, isProtected: Boolean = false) {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
         Box(Modifier.weight(1f)) { SectionLabel(text) }
+        if (isProtected) EtiquetaProtegido(Modifier.padding(start = 8.dp, end = if (onEdit != null) 4.dp else 0.dp))
         if (onEdit != null) TextLink("Editar", onClick = onEdit)
     }
 }
@@ -263,6 +268,8 @@ private fun ManagerSection(
             color = TextoPrincipal,
             style = MaterialTheme.typography.bodyLarge
         )
+        // Autorización del apoderado: todo menor la tiene (si faltara, se avisa en color de error)
+        if (player.isMinor) GuardianAuthorizationLine(player)
         val teamActive = state.teams.firstOrNull { it.id == player.teamId }?.active == true
         if (!teamActive && player.active && !player.hasAccount) {
             Text(
@@ -324,8 +331,8 @@ private fun InvitationRow(invitation: DtInvitation, onRevoke: () -> Unit) {
         InvitationState.REVOKED -> CoralSuave to ErrorTexto
     }
     val detail = when (invitationState) {
-        InvitationState.PENDING -> invitation.expiresAt?.let { "vence el ${dateFormat.format(it)}" }
-        InvitationState.EXPIRED -> invitation.expiresAt?.let { "venció el ${dateFormat.format(it)}" }
+        InvitationState.PENDING -> invitation.expiresAt?.let { "vence el ${it.toLocalDateText()}" }
+        InvitationState.EXPIRED -> invitation.expiresAt?.let { "venció el ${it.toLocalDateText()}" }
         else -> null
     }
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -360,7 +367,7 @@ private fun HistoryRow(entry: PlayerHistoryEntry) {
     Column {
         Text(text, color = TextoPrincipal, fontWeight = FontWeight.Bold, fontSize = 15.sp)
         Text(
-            listOfNotNull(entry.at?.let { dateFormat.format(it) }, entry.byName.ifBlank { null }?.let { "por $it" })
+            listOfNotNull(entry.at?.toLocalDateText(), entry.byName.ifBlank { null }?.let { "por $it" })
                 .joinToString(" · "),
             color = TextoSecundario,
             fontSize = 13.sp

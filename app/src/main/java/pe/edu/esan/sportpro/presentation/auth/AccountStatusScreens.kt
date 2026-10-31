@@ -17,12 +17,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import pe.edu.esan.sportpro.data.model.PrivacyTexts
+import pe.edu.esan.sportpro.presentation.components.AvisoProteccionDatos
 import pe.edu.esan.sportpro.presentation.components.Illustration
 import pe.edu.esan.sportpro.presentation.components.PrimaryButton
 import pe.edu.esan.sportpro.presentation.components.SportProCard
 import pe.edu.esan.sportpro.presentation.components.SportProScreen
 import pe.edu.esan.sportpro.ui.theme.SportProTheme
-import pe.edu.esan.sportpro.ui.theme.TextoSecundario
 import pe.edu.esan.sportpro.ui.theme.TextoSobreSuave
 import pe.edu.esan.sportpro.ui.theme.Turquesa
 
@@ -39,15 +40,9 @@ fun MinorBlockedScreen(onUnderstood: () -> Unit, onBackToStart: () -> Unit) {
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth()
         )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "En SportPro solo los mayores de 18 años tienen cuenta. Tu mamá, papá o apoderado se encarga de tu perfil.",
-            style = MaterialTheme.typography.bodyLarge,
-            color = TextoSecundario,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth()
-        )
         Spacer(Modifier.height(20.dp))
+        AvisoProteccionDatos(PrivacyTexts.TITLE_PERSONAL_DATA, PrivacyTexts.MINOR_BLOCKED)
+        Spacer(Modifier.height(16.dp))
         SportProCard {
             Text("¿Qué puedes hacer?", fontWeight = FontWeight.ExtraBold)
             Text(

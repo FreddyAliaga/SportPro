@@ -32,6 +32,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import pe.edu.esan.sportpro.data.model.INVITATION_VALID_DAYS
+import pe.edu.esan.sportpro.data.model.PrivacyTexts
+import pe.edu.esan.sportpro.data.model.withFinalPeriod
+import pe.edu.esan.sportpro.presentation.components.AvisoProteccionDatos
 import pe.edu.esan.sportpro.presentation.components.PrimaryButton
 import pe.edu.esan.sportpro.presentation.components.SecondaryButton
 import pe.edu.esan.sportpro.presentation.components.SmallChip
@@ -62,8 +65,10 @@ fun InvitePlayerScreen(viewModel: PlayerViewModel, onDone: () -> Unit) {
         Title(if (isGuardian) "Invita al apoderado" else "Invita al jugador")
         Spacer(Modifier.height(8.dp))
         Subtitle(
-            if (isGuardian) "Envíale este código. Con él crea su cuenta (o lo vincula desde \"Mis jugadores\") y queda como apoderado de $playerName."
-            else "Envíale este código a $playerName. Con él crea su cuenta y gestiona su propio perfil."
+            // shortPlayerName ya puede terminar en punto ("Mateo R."): no se duplica
+            if (isGuardian) "Envíale este código. Con él crea su cuenta (o lo vincula desde \"Mis jugadores\") y queda como " +
+                withFinalPeriod("apoderado de $playerName")
+            else "Envíale este código a ${withFinalPeriod(playerName)} Con él crea su cuenta y gestiona su propio perfil."
         )
         Spacer(Modifier.height(20.dp))
 
@@ -84,6 +89,12 @@ fun InvitePlayerScreen(viewModel: PlayerViewModel, onDone: () -> Unit) {
             Notice(Icons.Outlined.CheckCircle, "Se usa una sola vez")
             if (!isGuardian) Notice(Icons.Outlined.Shield, "Al usarlo, se retira el vínculo con sus apoderados")
         }
+        Spacer(Modifier.height(12.dp))
+        AvisoProteccionDatos(
+            PrivacyTexts.TITLE_PERSONAL_DATA,
+            if (isGuardian) PrivacyTexts.INVITE_GUARDIAN else PrivacyTexts.INVITE_PLAYER,
+            compact = true
+        )
 
         Spacer(Modifier.height(24.dp))
         PrimaryButton("Compartir código", onClick = {

@@ -32,6 +32,7 @@ import pe.edu.esan.sportpro.data.model.AccountStatus
 import pe.edu.esan.sportpro.data.model.DtInvitation
 import pe.edu.esan.sportpro.data.model.InvitationState
 import pe.edu.esan.sportpro.data.model.UserProfile
+import pe.edu.esan.sportpro.data.model.toLocalDateText
 import pe.edu.esan.sportpro.presentation.components.InitialsBadge
 import pe.edu.esan.sportpro.presentation.components.PrimaryButton
 import pe.edu.esan.sportpro.presentation.components.SelectablePill
@@ -50,8 +51,6 @@ import pe.edu.esan.sportpro.ui.theme.TextoPrincipal
 import pe.edu.esan.sportpro.ui.theme.TextoSecundario
 import pe.edu.esan.sportpro.ui.theme.Turquesa
 import pe.edu.esan.sportpro.ui.theme.TurquesaOscuro
-import java.text.SimpleDateFormat
-import java.util.Locale
 
 // US-002 · Usuarios e invitaciones (ADM): códigos de DT con su estado (RN-002) y usuarios por rol
 @Composable
@@ -161,8 +160,6 @@ fun UsersInvitationsScreen(
     }
 }
 
-private val dateFormat = SimpleDateFormat("dd/MM/yyyy", Locale.forLanguageTag("es-PE"))
-
 @Composable
 private fun InvitationCard(
     invitation: DtInvitation,
@@ -179,8 +176,8 @@ private fun InvitationCard(
     }
     val detail = when (state) {
         InvitationState.USED -> if (usedByName.isNotEmpty()) "usado por $usedByName" else "usado"
-        InvitationState.PENDING -> invitation.expiresAt?.let { "vence el ${dateFormat.format(it)}" } ?: ""
-        InvitationState.EXPIRED -> invitation.expiresAt?.let { "venció el ${dateFormat.format(it)}" } ?: ""
+        InvitationState.PENDING -> invitation.expiresAt?.let { "vence el ${it.toLocalDateText()}" } ?: ""
+        InvitationState.EXPIRED -> invitation.expiresAt?.let { "venció el ${it.toLocalDateText()}" } ?: ""
         InvitationState.REVOKED -> "anulado"
     }
 

@@ -2,6 +2,7 @@ package pe.edu.esan.sportpro.data.model
 
 import java.time.LocalDate
 import java.time.Period
+import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.time.format.ResolverStyle
@@ -13,10 +14,11 @@ import java.util.Date
 data class PlayerSportErrors(
     val name: String? = null,
     val dorsal: String? = null,
-    val birthDate: String? = null
+    val birthDate: String? = null,
+    val guardianAuthorization: String? = null
 ) {
     val hasErrors: Boolean
-        get() = listOf(name, dorsal, birthDate).any { it != null }
+        get() = listOf(name, dorsal, birthDate, guardianAuthorization).any { it != null }
 }
 
 // Errores por campo de los datos privados
@@ -32,7 +34,9 @@ data class PlayerPrivateErrors(
         get() = listOf(contactPhone, emergencyName, emergencyRelation, emergencyPhone, heightCm, weightKg).any { it != null }
 }
 
-fun validatePlayerSportForm(form: PlayerSportForm): PlayerSportErrors {
+// requireGuardianAuthorization: se registra a un menor (nuevo, o un mayor que pasa a menor)
+// y hace falta la casilla "Cuento con la autorización del apoderado"
+fun validatePlayerSportForm(form: PlayerSportForm, requireGuardianAuthorization: Boolean = false): PlayerSportErrors {
     val dorsal = form.dorsal.trim()
     val age = ageFromDigits(form.birthDate)
     return PlayerSportErrors(
@@ -46,7 +50,10 @@ fun validatePlayerSportForm(form: PlayerSportForm): PlayerSportErrors {
             age == null -> "Usa el formato DD/MM/AAAA."
             age !in 3..70 -> "Revisa la fecha de nacimiento."
             else -> null
-        }
+        },
+        guardianAuthorization = if (requireGuardianAuthorization && !form.guardianAuthorized) {
+            PrivacyTexts.GUARDIAN_AUTHORIZATION_ERROR
+        } else null
     )
 }
 
@@ -113,6 +120,11 @@ fun Date.toBirthDigits(): String =
 fun Date.toBirthText(): String =
     toInstant().atZone(ZoneOffset.UTC).toLocalDate().format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
 
+// Momento con hora (historial, autorización, vencimiento de códigos) -> "17/10/2026" en la zona del teléfono.
+// No usar con la fecha de nacimiento (va al mediodía UTC: toBirthText).
+fun Date.toLocalDateText(): String =
+    toInstant().atZone(ZoneId.systemDefault()).toLocalDate().format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
+
 // "Mateo Rodríguez Paz" -> "Mateo R." (privacidad: el código lo puede leer cualquiera que lo tenga)
 fun shortPlayerName(fullName: String): String {
     val words = fullName.trim().split(" ").filter { it.isNotBlank() }
@@ -122,3 +134,6 @@ fun shortPlayerName(fullName: String): String {
         else -> "${words[0]} ${words[1].first().uppercase()}."
     }.take(30)
 }
+
+// Cierra una frase con punto sin duplicarlo: "apoderado de Mateo R." (no "Mateo R..")
+fun withFinalPeriod(text: String): String = if (text.endsWith(".")) text else "$text."

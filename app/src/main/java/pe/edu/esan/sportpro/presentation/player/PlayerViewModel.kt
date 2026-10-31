@@ -101,12 +101,20 @@ data class PlayerUiState(
 
     val playerAge: Int? get() = playerPrivate?.birthDate?.let { ageOn(it) }
 
-    // Casilla "Cuento con la autorización del apoderado": al registrar a un menor nuevo o cuando
-    // un mayor pasa a menor al corregir su fecha. Los menores antiguos sin el dato no la piden al editarse.
+    // Casilla "Cuento con la autorización del apoderado": todo menor debe tenerla. Se pide al registrar
+    // a un menor nuevo o al editar a uno que aún no la tiene (por ejemplo, un mayor que pasa a menor).
     val needsGuardianAuthorization: Boolean
         get() {
             val age = ageFromDigits(sportForm.birthDate) ?: return false
-            return isMinorAge(age) && (editingNew || player?.isMinor == false)
+            return isMinorAge(age) && (editingNew || player?.guardianAuthorization != true)
+        }
+
+    // Al editar a un menor que ya tiene la autorización: se muestra quién la declaró en vez de la casilla
+    val existingGuardianAuthorization: Player?
+        get() {
+            val age = ageFromDigits(sportForm.birthDate) ?: return null
+            val p = player ?: return null
+            return if (!editingNew && isMinorAge(age) && p.guardianAuthorization) p else null
         }
     // Un menor que ya cumplió 18: el DT le genera un código JUG para el MISMO perfil
     val turnedAdult: Boolean get() = player?.isMinor == true && (playerAge ?: 0) >= 18
@@ -354,7 +362,7 @@ class PlayerViewModel : ViewModel() {
                 PlayerRepository.createPlayer(profile.academyId, team, state.sportForm, profile)
             } else {
                 val playerId = state.player?.id ?: return@launch
-                // Si pasa de mayor a menor, se guarda también la autorización del apoderado
+                // Si queda como menor sin autorización (p. ej. pasa de mayor a menor), se guarda también
                 val authorizedBy = if (needsAuthorization) profile else null
                 PlayerRepository.updateSportData(playerId, state.sportForm, authorizedBy).map { playerId }
             }

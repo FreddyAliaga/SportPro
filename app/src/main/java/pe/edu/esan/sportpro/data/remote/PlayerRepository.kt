@@ -156,8 +156,8 @@ object PlayerRepository {
 
     // "Editar datos deportivos" (DT o ADM). La fecha de nacimiento también se guarda aquí:
     // solo la editan el DT o el ADM, y con ella se vuelve a calcular si es menor de edad.
-    // authorizedBy: quien declara la autorización del apoderado cuando un mayor pasa a menor
-    // (null = no cambia).
+    // authorizedBy: quien declara la autorización del apoderado cuando el jugador queda como menor
+    // y aún no la tiene (null = no cambia).
     suspend fun updateSportData(playerId: String, form: PlayerSportForm, authorizedBy: UserProfile? = null): Result<Unit> {
         return try {
             val authorization = authorizedBy?.let { guardianAuthorizationData(it) } ?: emptyMap()
@@ -409,11 +409,15 @@ object PlayerRepository {
         guardianIds = (get("guardianIds") as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
         hasEmergencyContact = getBoolean("hasEmergencyContact") ?: false,
         active = getBoolean("active") ?: true,
-        // Los jugadores creados antes de la casilla no tienen estos campos
+        // Lectura defensiva: si falta el campo, la app no se cae (los mayores no lo tienen)
         guardianAuthorization = getBoolean("guardianAuthorization") ?: false,
         guardianAuthorizationBy = getString("guardianAuthorizationBy") ?: "",
         guardianAuthorizationByName = getString("guardianAuthorizationByName") ?: "",
-        guardianAuthorizationAt = getTimestamp("guardianAuthorizationAt")?.toDate()
+        // ESTIMATE: justo al guardar, la hora del servidor aún no llega; se usa la hora estimada del teléfono
+        guardianAuthorizationAt = getTimestamp(
+            "guardianAuthorizationAt",
+            DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+        )?.toDate()
     )
 
     private fun DocumentSnapshot.toPlayerPrivate() = PlayerPrivate(

@@ -20,7 +20,8 @@ data class Player(
     val hasEmergencyContact: Boolean = false,    // la app lo mantiene al guardar los datos privados
     val active: Boolean = true,                  // "Retirar" = false (nunca se borra, RN-004)
     // Autorización del apoderado que declara el DT o el ADM al registrar a un menor
-    // (Reglamento D.S. 016-2024-JUS, art. 22). Los jugadores antiguos y los mayores no la tienen.
+    // (Reglamento D.S. 016-2024-JUS, art. 22). Todo menor la tiene; los mayores no.
+    // Se lee con valor por defecto false para que la app no se caiga si falta el campo.
     val guardianAuthorization: Boolean = false,
     val guardianAuthorizationBy: String = "",    // uid de quien la declaró
     val guardianAuthorizationByName: String = "",// nombre de quien la declaró (para mostrarlo en el perfil)

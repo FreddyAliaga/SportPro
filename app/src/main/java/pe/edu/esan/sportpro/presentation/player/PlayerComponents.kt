@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import pe.edu.esan.sportpro.data.model.Player
 import pe.edu.esan.sportpro.data.model.PlayerStatus
+import pe.edu.esan.sportpro.data.model.toLocalDateText
 import pe.edu.esan.sportpro.presentation.components.ErrorBox
 import pe.edu.esan.sportpro.presentation.components.InfoBox
 import pe.edu.esan.sportpro.presentation.components.PlayerAvatar
@@ -85,6 +86,24 @@ fun DataRow(label: String, value: String) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(label, color = TextoSecundario, fontSize = 14.sp, modifier = Modifier.weight(1f))
         Text(value, color = TextoPrincipal, fontWeight = FontWeight.Bold, fontSize = 15.sp, modifier = Modifier.weight(1.3f))
+    }
+}
+
+// Línea de la autorización del apoderado de un menor (perfil y "Datos deportivos").
+// Sin fecha (aún no llega la del servidor) se muestra sin ella; el aviso en color de error
+// solo aparece si no tiene la autorización.
+@Composable
+fun GuardianAuthorizationLine(player: Player) {
+    if (player.guardianAuthorization) {
+        val byName = player.guardianAuthorizationByName.ifBlank { "el equipo técnico o la administración" }
+        val date = player.guardianAuthorizationAt?.let { " el ${it.toLocalDateText()}" } ?: ""
+        Text(
+            "Autorización del apoderado declarada por $byName$date",
+            color = TextoSecundario,
+            fontSize = 13.sp
+        )
+    } else {
+        Text("Falta la autorización del apoderado", color = ErrorTexto, fontWeight = FontWeight.Bold, fontSize = 13.sp)
     }
 }
 

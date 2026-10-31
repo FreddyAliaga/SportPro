@@ -36,6 +36,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import pe.edu.esan.sportpro.data.model.Invitation
+import pe.edu.esan.sportpro.data.model.academyInitials
 import pe.edu.esan.sportpro.data.remote.InvitationRepository
 import pe.edu.esan.sportpro.presentation.components.ErrorBox
 import pe.edu.esan.sportpro.presentation.components.InitialsBadge
@@ -148,7 +149,7 @@ private fun InvitationFound(invitation: Invitation) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        InitialsBadge(initialsOf(invitation.academyName))
+        InitialsBadge(academyInitials(invitation.academyName))
         Column {
             Text(invitation.academyName, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, color = TextoPrincipal)
             val place = listOf(invitation.teamName, invitation.city).filter { it.isNotBlank() }.joinToString(" · ")
@@ -171,14 +172,10 @@ private fun InvitationFound(invitation: Invitation) {
                 }
             }
             if (invitation.invitedByName.isNotBlank()) append(", invitado por ${invitation.invitedByName}")
-            append(".")
+            // Un solo punto final aunque el nombre ya termine en punto ("Luis T."), como withFinalPeriod
+            if (!toAnnotatedString().text.endsWith(".")) append(".")
         },
         style = MaterialTheme.typography.bodyLarge
     )
 }
 
-// "Academia Los Halcones" -> "LH"
-fun initialsOf(name: String): String {
-    val words = name.split(" ").filter { it.isNotBlank() && it.lowercase() !in listOf("academia", "de", "del", "la", "el") }
-    return words.take(2).joinToString("") { it.first().uppercase() }.ifEmpty { "SP" }
-}

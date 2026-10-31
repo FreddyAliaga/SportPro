@@ -143,7 +143,9 @@ fun PlayerFormScreen(
             PillGroup("Pie dominante", PLAYER_FEET, form.foot) { viewModel.onSportFormChange(form.copy(foot = it)) }
         }
 
-        // Solo para un menor (nuevo, o un mayor que pasa a menor): sin la casilla no se guarda
+        // Todo menor necesita la autorización: si aún no la tiene (nuevo, o un mayor que pasa a menor),
+        // se pide la casilla y sin ella no se guarda; si ya la tiene, solo se muestra quién la declaró
+        val existingAuthorization = state.existingGuardianAuthorization
         if (state.needsGuardianAuthorization) {
             Spacer(Modifier.height(16.dp))
             GuardianAuthorizationBox(
@@ -151,14 +153,18 @@ fun PlayerFormScreen(
                 error = errors.guardianAuthorization,
                 onCheckedChange = { viewModel.onSportFormChange(form.copy(guardianAuthorized = it)) }
             )
+        } else if (existingAuthorization != null) {
+            Spacer(Modifier.height(12.dp))
+            GuardianAuthorizationLine(existingAuthorization)
         }
 
         PlayerMessages(state)
         Spacer(Modifier.height(20.dp))
+        // Mientras se guarda (isLoading del ViewModel): "Guardando…" y deshabilitado, para no tocarlo dos veces
         PrimaryButton(
-            if (isNew) "Agregar al plantel" else "Guardar cambios",
+            if (state.isLoading) "Guardando…" else if (isNew) "Agregar al plantel" else "Guardar cambios",
             onClick = { viewModel.saveSport(onSaved) },
-            loading = state.isLoading
+            enabled = !state.isLoading
         )
     }
 }

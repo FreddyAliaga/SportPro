@@ -38,6 +38,7 @@ import pe.edu.esan.sportpro.data.model.PlayerPrivate
 import pe.edu.esan.sportpro.data.model.PrivacyTexts
 import pe.edu.esan.sportpro.data.model.Team
 import pe.edu.esan.sportpro.data.model.toBirthText
+import pe.edu.esan.sportpro.data.model.toLocalDateText
 import pe.edu.esan.sportpro.presentation.academy.ConfirmDialog
 import pe.edu.esan.sportpro.presentation.components.AvisoProteccionDatos
 import pe.edu.esan.sportpro.presentation.components.EtiquetaProtegido
@@ -60,10 +61,6 @@ import pe.edu.esan.sportpro.ui.theme.TextoPrincipal
 import pe.edu.esan.sportpro.ui.theme.TextoSecundario
 import pe.edu.esan.sportpro.ui.theme.Turquesa
 import pe.edu.esan.sportpro.ui.theme.TurquesaOscuro
-import java.text.SimpleDateFormat
-import java.util.Locale
-
-private val dateFormat = SimpleDateFormat("dd/MM/yyyy", Locale.forLanguageTag("es-PE"))
 
 // US-003 · Perfil del jugador.
 // - DT y ADM: editan los datos deportivos, invitan al apoderado o al jugador, trasladan, retiran y reactivan.
@@ -168,6 +165,8 @@ fun PlayerDetailScreen(
             DataRow("Posición secundaria", player.positionSecondary.ifEmpty { "Ninguna" })
             DataRow("Dorsal", player.dorsal?.toString() ?: "Sin dorsal")
             DataRow("Pie dominante", player.foot)
+            // El apoderado también ve la autorización (DT y ADM la ven en "Cuenta y apoderados")
+            if (!state.canManage && player.isMinor) GuardianAuthorizationLine(player)
         }
 
         // ---------- Datos privados ----------
@@ -269,16 +268,8 @@ private fun ManagerSection(
             color = TextoPrincipal,
             style = MaterialTheme.typography.bodyLarge
         )
-        // Autorización del apoderado declarada al registrarlo (los jugadores antiguos no la tienen)
-        val authorizationAt = player.guardianAuthorizationAt
-        if (player.isMinor && player.guardianAuthorization && authorizationAt != null) {
-            val byName = player.guardianAuthorizationByName.ifBlank { "el equipo técnico o la administración" }
-            Text(
-                "Autorización del apoderado declarada por $byName el ${dateFormat.format(authorizationAt)}",
-                color = TextoSecundario,
-                fontSize = 13.sp
-            )
-        }
+        // Autorización del apoderado: todo menor la tiene (si faltara, se avisa en color de error)
+        if (player.isMinor) GuardianAuthorizationLine(player)
         val teamActive = state.teams.firstOrNull { it.id == player.teamId }?.active == true
         if (!teamActive && player.active && !player.hasAccount) {
             Text(
@@ -340,8 +331,8 @@ private fun InvitationRow(invitation: DtInvitation, onRevoke: () -> Unit) {
         InvitationState.REVOKED -> CoralSuave to ErrorTexto
     }
     val detail = when (invitationState) {
-        InvitationState.PENDING -> invitation.expiresAt?.let { "vence el ${dateFormat.format(it)}" }
-        InvitationState.EXPIRED -> invitation.expiresAt?.let { "venció el ${dateFormat.format(it)}" }
+        InvitationState.PENDING -> invitation.expiresAt?.let { "vence el ${it.toLocalDateText()}" }
+        InvitationState.EXPIRED -> invitation.expiresAt?.let { "venció el ${it.toLocalDateText()}" }
         else -> null
     }
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -376,7 +367,7 @@ private fun HistoryRow(entry: PlayerHistoryEntry) {
     Column {
         Text(text, color = TextoPrincipal, fontWeight = FontWeight.Bold, fontSize = 15.sp)
         Text(
-            listOfNotNull(entry.at?.let { dateFormat.format(it) }, entry.byName.ifBlank { null }?.let { "por $it" })
+            listOfNotNull(entry.at?.toLocalDateText(), entry.byName.ifBlank { null }?.let { "por $it" })
                 .joinToString(" · "),
             color = TextoSecundario,
             fontSize = 13.sp

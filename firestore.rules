@@ -132,7 +132,7 @@ service cloud.firestore {
     }
 
     // Autorización del apoderado (Reglamento D.S. 016-2024-JUS, art. 22) declarada EN ESTA operación
-    // por quien la hace. Los jugadores creados antes de la casilla no tienen estos campos.
+    // por quien la hace (los mayores no tienen estos campos).
     function guardianAuthorizedNow(data) {
       return data.get('guardianAuthorization', false) == true
         && data.get('guardianAuthorizationBy', '') == request.auth.uid
@@ -452,9 +452,9 @@ service cloud.firestore {
       allow update: if canManage(resource.data)
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'category', 'positionMain', 'positionSecondary', 'dorsal', 'foot', 'isMinor', 'teamId', 'active', 'guardianAuthorization', 'guardianAuthorizationBy', 'guardianAuthorizationByName', 'guardianAuthorizationAt'])
         && validPlayer(request.resource.data)
-        // Si pasa de mayor a menor, se declara la autorización del apoderado en esta operación
-        // (los menores antiguos sin el dato se siguen editando sin pedirla)
-        && (unchanged('isMinor') || request.resource.data.isMinor == false || guardianAuthorizedNow(request.resource.data))
+        // Todo menor queda con la autorización del apoderado (si pasa de mayor a menor, se declara aquí)
+        && (request.resource.data.isMinor == false
+            || request.resource.data.get('guardianAuthorization', false) == true)
         // La autorización no se borra ni se falsea: si cambia, es verdadera, de quien edita y de este momento
         && ((unchanged('guardianAuthorization') && unchanged('guardianAuthorizationBy')
               && unchanged('guardianAuthorizationByName') && unchanged('guardianAuthorizationAt'))

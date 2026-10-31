@@ -2,6 +2,7 @@ package pe.edu.esan.sportpro.data.model
 
 import java.time.LocalDate
 import java.time.Period
+import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.time.format.ResolverStyle
@@ -118,6 +119,11 @@ fun Date.toBirthDigits(): String =
 // Fecha guardada -> "14/03/2014" para mostrar
 fun Date.toBirthText(): String =
     toInstant().atZone(ZoneOffset.UTC).toLocalDate().format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
+
+// Momento con hora (historial, autorización, vencimiento de códigos) -> "17/10/2026" en la zona del teléfono.
+// No usar con la fecha de nacimiento (va al mediodía UTC: toBirthText).
+fun Date.toLocalDateText(): String =
+    toInstant().atZone(ZoneId.systemDefault()).toLocalDate().format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
 
 // "Mateo Rodríguez Paz" -> "Mateo R." (privacidad: el código lo puede leer cualquiera que lo tenga)
 fun shortPlayerName(fullName: String): String {

@@ -33,15 +33,17 @@ import androidx.compose.ui.unit.sp
 import pe.edu.esan.sportpro.data.model.INVITATION_VALID_DAYS
 import pe.edu.esan.sportpro.presentation.components.PrimaryButton
 import pe.edu.esan.sportpro.presentation.components.SecondaryButton
-import pe.edu.esan.sportpro.presentation.components.SmallChip
 import pe.edu.esan.sportpro.presentation.components.SportProCard
 import pe.edu.esan.sportpro.presentation.components.SportProScreen
+import pe.edu.esan.sportpro.presentation.components.StatusChip
 import pe.edu.esan.sportpro.presentation.components.Subtitle
 import pe.edu.esan.sportpro.presentation.components.TextLink
 import pe.edu.esan.sportpro.presentation.components.Title
 import pe.edu.esan.sportpro.presentation.components.TopBarWithSteps
+import pe.edu.esan.sportpro.ui.theme.SuperficieSuave
 import pe.edu.esan.sportpro.ui.theme.TextoSobreSuave
 import pe.edu.esan.sportpro.ui.theme.Turquesa
+import pe.edu.esan.sportpro.ui.theme.TurquesaOscuro
 
 // US-002 · Invita a un entrenador: muestra el código recién generado para compartirlo
 @Composable
@@ -62,7 +64,8 @@ fun InviteCoachScreen(viewModel: AcademyViewModel, onDone: () -> Unit) {
 
         SportProCard {
             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                SmallChip("DT · ${state.generatedTeamName}")
+                // Opción G: el coral es solo decorativo; el chip va en turquesa suave
+                StatusChip("DT · ${state.generatedTeamName}", SuperficieSuave, TurquesaOscuro)
                 Spacer(Modifier.height(14.dp))
                 Text(
                     code,

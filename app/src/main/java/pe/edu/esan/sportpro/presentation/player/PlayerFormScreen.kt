@@ -38,6 +38,7 @@ import pe.edu.esan.sportpro.data.model.PrivacyTexts
 import pe.edu.esan.sportpro.data.model.TEAM_CATEGORIES
 import pe.edu.esan.sportpro.data.model.ageFromDigits
 import pe.edu.esan.sportpro.data.model.isMinorAge
+import pe.edu.esan.sportpro.presentation.components.Messages
 import pe.edu.esan.sportpro.presentation.components.AvisoProteccionDatos
 import pe.edu.esan.sportpro.presentation.components.DateVisualTransformation
 import pe.edu.esan.sportpro.presentation.components.InfoBox
@@ -158,7 +159,7 @@ fun PlayerFormScreen(
             GuardianAuthorizationLine(existingAuthorization)
         }
 
-        PlayerMessages(state)
+        Messages(state.errorMessage, state.infoMessage)
         Spacer(Modifier.height(20.dp))
         // Mientras se guarda (isLoading del ViewModel): "Guardando…" y deshabilitado, para no tocarlo dos veces
         PrimaryButton(

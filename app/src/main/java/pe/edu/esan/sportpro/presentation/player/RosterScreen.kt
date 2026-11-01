@@ -13,6 +13,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import pe.edu.esan.sportpro.data.model.Player
+import pe.edu.esan.sportpro.presentation.components.Messages
 import pe.edu.esan.sportpro.presentation.components.ErrorBox
 import pe.edu.esan.sportpro.presentation.components.PrimaryButton
 import pe.edu.esan.sportpro.presentation.components.SectionLabel
@@ -56,7 +57,7 @@ fun RosterScreen(
             Spacer(Modifier.height(12.dp))
             ErrorBox(it)
         }
-        PlayerMessages(state)
+        Messages(state.errorMessage, state.infoMessage)
 
         if (!state.rosterLoaded) {
             if (state.loadError == null) {

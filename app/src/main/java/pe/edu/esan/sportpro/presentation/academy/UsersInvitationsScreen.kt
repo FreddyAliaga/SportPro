@@ -25,6 +25,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -33,7 +34,11 @@ import pe.edu.esan.sportpro.data.model.DtInvitation
 import pe.edu.esan.sportpro.data.model.InvitationState
 import pe.edu.esan.sportpro.data.model.UserProfile
 import pe.edu.esan.sportpro.data.model.toLocalDateText
+import pe.edu.esan.sportpro.presentation.components.ConfirmDialog
+import pe.edu.esan.sportpro.presentation.components.Messages
+import pe.edu.esan.sportpro.presentation.components.ErrorBox
 import pe.edu.esan.sportpro.presentation.components.InitialsBadge
+import pe.edu.esan.sportpro.presentation.components.LoadingBox
 import pe.edu.esan.sportpro.presentation.components.PrimaryButton
 import pe.edu.esan.sportpro.presentation.components.SelectablePill
 import pe.edu.esan.sportpro.presentation.components.SportProScreen
@@ -68,7 +73,14 @@ fun UsersInvitationsScreen(
     if (showTeamPicker) {
         TeamPickerDialog(
             teams = state.activeTeamsByCategory.flatMap { it.second },
-            coachesOf = state::coachesOf,
+            blockedReason = { team ->
+                val coaches = state.coachesOf(team.id)
+                when {
+                    coaches.isNotEmpty() -> "Ya tiene DT (${coaches.joinToString(" y ") { it.name }}). Para otro DT, usa Cambiar DT."
+                    state.pendingDtCodeOf(team.id) != null -> "Ya tiene un código de DT pendiente. Anúlalo para generar otro."
+                    else -> null
+                }
+            },
             onDismiss = { showTeamPicker = false },
             onPick = { team ->
                 showTeamPicker = false
@@ -110,17 +122,21 @@ fun UsersInvitationsScreen(
         }
         state.loadError?.let {
             Spacer(Modifier.height(12.dp))
-            pe.edu.esan.sportpro.presentation.components.ErrorBox(it)
+            ErrorBox(it)
         }
-        Messages(state)
+        Messages(state.errorMessage, state.infoMessage)
         Spacer(Modifier.height(16.dp))
 
         if (tab == 0) {
             Subtitle("Genera un código para cada DT. Revisa su estado y anula los que ya no necesites.")
             Spacer(Modifier.height(16.dp))
-            PrimaryButton("+ Nueva invitación de DT", onClick = { showTeamPicker = true }, loading = state.isLoading)
+            PrimaryButton("+ Nueva invitación de DT", onClick = { showTeamPicker = true }, loading = state.invitationLoading)
             Spacer(Modifier.height(16.dp))
-            if (state.sortedInvitations.isEmpty()) Subtitle("Aún no has generado códigos.")
+            if (!state.invitationsLoaded) {
+                if (state.loadErrors["códigos"] == null) LoadingBox()
+            } else if (state.sortedInvitations.isEmpty()) {
+                Subtitle("Aún no has generado códigos.")
+            }
             state.sortedInvitations.forEach { invitation ->
                 InvitationCard(
                     invitation = invitation,
@@ -140,6 +156,12 @@ fun UsersInvitationsScreen(
                 }
             }
             Spacer(Modifier.height(16.dp))
+            if (!state.membersLoaded) {
+                if (state.loadErrors["usuarios"] == null) LoadingBox()
+            } else if (state.filteredMembers.isEmpty()) {
+                Subtitle("No hay usuarios con este rol.")
+                Spacer(Modifier.height(12.dp))
+            }
             state.filteredMembers.forEach { member ->
                 // Solo se puede desactivar/reactivar una cuenta activa o desactivada, y nunca la propia
                 val canToggle = member.uid != state.admin?.uid &&
@@ -225,7 +247,15 @@ private fun MemberCard(member: UserProfile, teamName: String, onClick: (() -> Un
             .fillMaxWidth()
             .clip(RoundedCornerShape(22.dp))
             .background(Tarjeta)
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .then(
+                if (onClick != null) {
+                    Modifier.clickable(
+                        onClickLabel = if (member.status == AccountStatus.ACTIVE) "Desactivar cuenta" else "Reactivar cuenta",
+                        role = Role.Button,
+                        onClick = onClick
+                    )
+                } else Modifier
+            )
             .padding(14.dp)
     ) {
         InitialsBadge(member.initials, size = 44.dp)

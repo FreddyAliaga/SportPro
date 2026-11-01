@@ -52,6 +52,8 @@ service cloud.firestore {
       return data.name is string && data.name.size() >= 3 && data.name.size() <= 80
         && data.city is string && data.city.size() > 0 && data.city.size() <= 60
         && data.institutionalEmail is string && data.institutionalEmail.size() <= 100
+        // formato de correo sencillo (la app valida con un patrón más estricto)
+        && data.institutionalEmail.matches('^[^@ ]+@[^@ ]+[.][^@ ]+$')
         && data.logoBase64 is string && data.logoBase64.size() <= 204800
         // RN-008: plazos de convocatoria
         && data.callupNoticeHours is int && data.callupNoticeHours >= 1 && data.callupNoticeHours <= 168
@@ -87,9 +89,11 @@ service cloud.firestore {
       return /databases/$(database)/documents/invitations/$(code);
     }
 
-    // DT activo de ESE equipo (el DT es el usuario con role "DT" y teamId del equipo)
+    // DT activo de ESE equipo (el DT es el usuario con role "DT" y teamId del equipo).
+    // El equipo debe estar activo: el DT de un equipo desactivado ya no ve a sus jugadores.
     function isDtOfTeam(academyId, teamId) {
-      return isMemberOf(academyId) && myProfile().role == 'DT' && myProfile().teamId == teamId;
+      return isMemberOf(academyId) && myProfile().role == 'DT' && myProfile().teamId == teamId
+        && get(teamPath(academyId, teamId)).data.active == true;
     }
 
     // Gestiona al jugador: el ADM de su academia o el DT de su equipo
@@ -223,16 +227,28 @@ service cloud.firestore {
         && request.resource.data.status == 'ANULADO'
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']);
 
-      // US-002: al renombrar la academia, el ADM actualiza el nombre en sus códigos sin usar
-      // (solo academyName e invitedByName, y solo con el nombre nuevo de la academia,
-      // en la misma operación). invitedByName solo puede quedar como "la administración de <nombre nuevo>".
+      // US-002: al renombrar la academia o cambiar su ciudad, el ADM actualiza esas copias en sus
+      // códigos sin usar (solo academyName, invitedByName y city, y solo con los valores reales de la
+      // academia después del cambio, en la misma operación).
+      // invitedByName solo puede quedar como "la administración de <nombre nuevo>".
       allow update: if signedIn()
         && isAdmOf(resource.data.academyId)
         && resource.data.get('used', false) == false
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['academyName', 'invitedByName'])
-        && request.resource.data.academyName == getAfter(academyPath(resource.data.academyId)).data.name
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['academyName', 'invitedByName', 'city'])
+        && (unchanged('academyName')
+            || request.resource.data.academyName == getAfter(academyPath(resource.data.academyId)).data.name)
         && (unchanged('invitedByName')
-            || request.resource.data.invitedByName == 'la administración de ' + getAfter(academyPath(resource.data.academyId)).data.name);
+            || request.resource.data.invitedByName == 'la administración de ' + getAfter(academyPath(resource.data.academyId)).data.name)
+        && (unchanged('city')
+            || request.resource.data.city == getAfter(academyPath(resource.data.academyId)).data.city);
+
+      // US-002: al renombrar un equipo, el ADM actualiza teamName en sus códigos sin usar
+      // (solo teamName, y solo con el nombre real del equipo después del cambio).
+      allow update: if signedIn()
+        && isAdmOf(resource.data.academyId)
+        && resource.data.get('used', false) == false
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['teamName'])
+        && request.resource.data.teamName == getAfter(teamPath(resource.data.academyId, resource.data.teamId)).data.name;
 
       // US-002: el ADM crea códigos de DT para un equipo ACTIVO de su academia (vencen en 7 días).
       // Los códigos de apoderado los crea el DT en la US-003.
@@ -252,7 +268,12 @@ service cloud.firestore {
         && request.resource.data.city == get(academyPath(request.resource.data.academyId)).data.city
         && request.resource.data.teamName == get(teamPath(request.resource.data.academyId, request.resource.data.teamId)).data.name
         && get(teamPath(request.resource.data.academyId, request.resource.data.teamId)).data.active == true
+        // el texto "invitado por" es siempre el de la administración de esa academia
+        && request.resource.data.invitedByName == 'la administración de ' + get(academyPath(request.resource.data.academyId)).data.name
+        // fecha de creación del servidor y vencimiento en el futuro (a lo mucho 8 días)
+        && request.resource.data.createdAt == request.time
         && request.resource.data.expiresAt is timestamp
+        && request.resource.data.expiresAt > request.time
         && request.resource.data.expiresAt <= request.time + duration.value(8, 'd');
 
       // US-003 (RN-002, RN-003): el DT (para jugadores de su equipo) o el ADM (para cualquiera de
@@ -324,8 +345,13 @@ service cloud.firestore {
         && invitationAfter(request.resource.data.invitationCode).usedBy == request.auth.uid
         && request.resource.data.role == invitationAfter(request.resource.data.invitationCode).role
         && request.resource.data.academyId == invitationAfter(request.resource.data.invitationCode).academyId
+        // el nombre de la academia que se copia al perfil debe ser el real
+        && request.resource.data.academyName == get(academyPath(request.resource.data.academyId)).data.name
         && request.resource.data.teamId == invitationAfter(request.resource.data.invitationCode).get('teamId', '')
-        && request.resource.data.playerId == invitationAfter(request.resource.data.invitationCode).get('playerId', '');
+        && request.resource.data.playerId == invitationAfter(request.resource.data.invitationCode).get('playerId', '')
+        // US-002: los códigos DT, JUG y PAD solo sirven si su equipo sigue activo
+        && (!(request.resource.data.role in ['DT', 'JUG', 'PAD'])
+            || get(teamPath(request.resource.data.academyId, request.resource.data.teamId)).data.active == true);
 
       // US-002: "Registrar mi academia". El perfil ADM se crea SIN código, en la misma
       // transacción que crea su academia (nueva) con adminUid = su uid.
@@ -359,7 +385,7 @@ service cloud.firestore {
       // US-002: el ADM actualiza perfiles de SU academia, solo estos campos:
       //  - status: active <-> inactive (desactivar/reactivar), nunca el suyo
       //    ni el de cuentas bloqueadas o sin verificar
-      //  - teamId: el DT de un equipo ("" = sin equipo, o un equipo de la academia);
+      //  - teamId: el DT de un equipo ("" = sin equipo, o un equipo ACTIVO de la academia);
       //    al desactivar a un DT o su equipo, queda en ""
       //  - academyName: la copia del nombre cuando se renombra la academia
       allow update: if signedIn()
@@ -372,7 +398,7 @@ service cloud.firestore {
         && (unchanged('teamId') || (
               resource.data.role == 'DT'
               && (request.resource.data.teamId == ''
-                  || existsAfter(/databases/$(database)/documents/academies/$(resource.data.academyId)/teams/$(request.resource.data.teamId)))))
+                  || getAfter(teamPath(resource.data.academyId, request.resource.data.teamId)).data.active == true)))
         && (unchanged('academyName')
               || request.resource.data.academyName == getAfter(academyPath(resource.data.academyId)).data.name);
 

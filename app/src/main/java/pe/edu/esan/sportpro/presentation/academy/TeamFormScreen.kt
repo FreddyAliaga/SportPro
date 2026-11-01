@@ -23,6 +23,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import pe.edu.esan.sportpro.data.model.TEAM_CATEGORIES
+import pe.edu.esan.sportpro.presentation.components.ConfirmDialog
+import pe.edu.esan.sportpro.presentation.components.Messages
 import pe.edu.esan.sportpro.presentation.components.PrimaryButton
 import pe.edu.esan.sportpro.presentation.components.SecondaryButton
 import pe.edu.esan.sportpro.presentation.components.SectionLabel
@@ -57,12 +59,12 @@ fun TeamFormScreen(
     if (showCoachPicker) {
         CoachPickerDialog(
             team = team,
-            selectedUid = form.coachUid,
+            selectedUid = state.teamFormCoachUid,
             coaches = state.activeCoaches,
             teamNameOf = state::teamName,
             onDismiss = { showCoachPicker = false },
             onConfirm = { uid ->
-                viewModel.onTeamFormChange(form.copy(coachUid = uid))
+                viewModel.onTeamFormChange(form.copy(coachUid = uid, coachChanged = true))
                 showCoachPicker = false
             }
         )
@@ -135,22 +137,31 @@ fun TeamFormScreen(
         SportProCard {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    state.memberName(form.coachUid).ifEmpty { "Sin DT" },
+                    when {
+                        !isNew && !state.membersLoaded -> "Cargando…"
+                        else -> state.memberName(state.teamFormCoachUid).ifEmpty { "Sin DT" }
+                    },
                     fontWeight = FontWeight.ExtraBold,
                     fontSize = 17.sp,
                     color = TextoPrincipal,
                     modifier = Modifier.weight(1f)
                 )
-                TextLink("Cambiar") { showCoachPicker = true }
+                // A un equipo desactivado no se le asigna DT
+                if (team?.active != false && (isNew || state.membersLoaded)) TextLink("Cambiar") { showCoachPicker = true }
             }
+            val pendingCode = team?.let { state.pendingDtCodeOf(it.id) }
             Text(
-                "¿Tu DT aún no está en SportPro? Guarda el equipo como Sin DT e invítalo con un código.",
+                when {
+                    team?.active == false -> "Reactiva el equipo para asignarle un DT."
+                    pendingCode != null -> "Ya hay un código de DT pendiente (${pendingCode.code}). Si asignas un DT aquí, ese código se anula."
+                    else -> "¿Tu DT aún no está en SportPro? Guarda el equipo como Sin DT e invítalo con un código."
+                },
                 color = TextoSecundario,
                 style = MaterialTheme.typography.bodyMedium
             )
         }
 
-        Messages(state)
+        Messages(state.errorMessage, state.infoMessage)
         Spacer(Modifier.height(20.dp))
         PrimaryButton("Guardar equipo", onClick = { viewModel.saveTeam(onSaved) }, loading = state.isLoading)
 
@@ -158,8 +169,10 @@ fun TeamFormScreen(
         if (team != null) {
             Spacer(Modifier.height(12.dp))
             if (team.active) {
-                if (state.coachesOf(team.id).isEmpty()) {
-                    SecondaryButton("Invitar DT con un código", { viewModel.createInvitation(team, onInvitationCreated) }, enabled = !state.isLoading)
+                // Un solo DT por equipo: sin DT y sin otro código de DT pendiente
+                // (mientras cargan los usuarios o los códigos aún no se sabe: no se muestra)
+                if (state.membersLoaded && state.invitationsLoaded && state.canInviteCoach(team.id)) {
+                    SecondaryButton("Invitar DT con un código", { viewModel.createInvitation(team, onInvitationCreated) }, enabled = !state.invitationLoading)
                     Spacer(Modifier.height(12.dp))
                 }
                 SecondaryButton("Desactivar equipo", { showDeactivate = true }, enabled = !state.isLoading)

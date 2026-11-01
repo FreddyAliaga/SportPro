@@ -78,9 +78,10 @@ fun shortCategory(category: String): String {
     }
 }
 
-// Palabras que no cuentan para las iniciales de la academia (se comparan sin tildes ni mayúsculas)
-private val ACADEMY_TYPE_WORDS = setOf("academia", "club", "escuela")          // se quitan siempre
-private val ACADEMY_ARTICLE_WORDS = setOf("los", "las", "la", "el", "de", "del") // solo si quedan 2 o más palabras
+// Palabras que no cuentan para las iniciales de la academia ni para el prefijo de sus códigos de
+// invitación (AcademyRepository.codePrefix). Se comparan sin tildes y en minúsculas.
+val ACADEMY_TYPE_WORDS = setOf("academia", "club", "escuela", "fc", "cf")   // en las iniciales: se quitan siempre
+val ACADEMY_ARTICLE_WORDS = setOf("los", "las", "la", "el", "de", "del")   // en las iniciales: solo si quedan 2 o más palabras
 
 // Iniciales de la academia, en mayúscula y sin tilde:
 // "Academia Los Cóndores" -> "LC", "El Unico Grande" -> "UG", "La U El más grande" -> "UM".

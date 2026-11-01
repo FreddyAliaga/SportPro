@@ -263,6 +263,27 @@ fun InfoBox(content: @Composable RowScope.() -> Unit) {
     )
 }
 
+// Mensajes de éxito o error de la última acción (US-002 y US-003)
+@Composable
+fun Messages(errorMessage: String?, infoMessage: String?) {
+    errorMessage?.let {
+        Spacer(Modifier.height(12.dp))
+        ErrorBox(it)
+    }
+    infoMessage?.let {
+        Spacer(Modifier.height(12.dp))
+        InfoBox { Text(it, color = TextoPrincipal, fontWeight = FontWeight.Bold, fontSize = 14.sp) }
+    }
+}
+
+// Indicador de carga centrado (mientras llegan los datos)
+@Composable
+fun LoadingBox() {
+    Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+        CircularProgressIndicator(color = Turquesa)
+    }
+}
+
 // Ilustración: bloque turquesa suave con arco de cancha, círculo coral y un ícono al centro
 @Composable
 fun Illustration(icon: ImageVector, height: Dp = 210.dp) {

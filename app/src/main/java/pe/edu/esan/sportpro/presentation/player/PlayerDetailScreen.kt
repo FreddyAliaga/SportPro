@@ -39,7 +39,8 @@ import pe.edu.esan.sportpro.data.model.PrivacyTexts
 import pe.edu.esan.sportpro.data.model.Team
 import pe.edu.esan.sportpro.data.model.toBirthText
 import pe.edu.esan.sportpro.data.model.toLocalDateText
-import pe.edu.esan.sportpro.presentation.academy.ConfirmDialog
+import pe.edu.esan.sportpro.presentation.components.ConfirmDialog
+import pe.edu.esan.sportpro.presentation.components.Messages
 import pe.edu.esan.sportpro.presentation.components.AvisoProteccionDatos
 import pe.edu.esan.sportpro.presentation.components.EtiquetaProtegido
 import pe.edu.esan.sportpro.presentation.components.ErrorBox
@@ -141,7 +142,7 @@ fun PlayerDetailScreen(
             Spacer(Modifier.height(12.dp))
             ErrorBox(it)
         }
-        PlayerMessages(state)
+        Messages(state.errorMessage, state.infoMessage)
 
         if (state.canManage && state.turnedAdult && !player.hasAccount && player.active) {
             Spacer(Modifier.height(12.dp))

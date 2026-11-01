@@ -5,6 +5,7 @@ import com.google.firebase.firestore.DocumentReference
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.Source
 import com.google.firebase.firestore.Transaction
@@ -12,6 +13,8 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
+import pe.edu.esan.sportpro.data.model.ACADEMY_ARTICLE_WORDS
+import pe.edu.esan.sportpro.data.model.ACADEMY_TYPE_WORDS
 import pe.edu.esan.sportpro.data.model.AccountStatus
 import pe.edu.esan.sportpro.data.model.Academy
 import pe.edu.esan.sportpro.data.model.DEFAULT_CALLUP_CONFIRM_HOURS
@@ -47,6 +50,9 @@ object AcademyRepository {
                 error != null -> trySend(Result.failure(Exception(FirebaseAuthManager.friendlyMessage(error))))
                 snapshot == null -> Unit
                 snapshot.exists() -> trySend(Result.success(snapshot.toAcademy()))
+                // Sin internet y sin copia en el teléfono: "no existe" solo significa que no se pudo leer
+                snapshot.metadata.isFromCache ->
+                    trySend(Result.failure(Exception(FirebaseAuthManager.NO_CONNECTION_MESSAGE)))
                 // Si no existe se avisa (en vez de quedarse cargando para siempre)
                 else -> trySend(Result.failure(Exception("No encontramos tu academia.")))
             }
@@ -80,29 +86,33 @@ object AcademyRepository {
     // ---------------------------------------------------------------- Academia
 
     // Guarda los datos de la academia. Si cambió el nombre, también se actualiza la copia
-    // "academyName" en los perfiles de la academia (es la que se muestra en el inicio)
-    // y en sus códigos pendientes (es la que ve quien se registra con el código).
-    suspend fun updateAcademy(academy: Academy, previousName: String): Result<Unit> {
+    // "academyName" en los perfiles de la academia (es la que se muestra en el inicio).
+    // Si cambió el nombre o la ciudad, también se actualizan en sus códigos sin usar
+    // (es lo que ve quien se registra con el código). previous: la academia antes del cambio.
+    suspend fun updateAcademy(academy: Academy, previous: Academy): Result<Unit> {
         return try {
             val newName = academy.name.trim()
-            val renamed = newName != previousName
+            val newCity = academy.city.trim()
+            val renamed = newName != previous.name
+            val cityChanged = newCity != previous.city
             // Consultas en el servidor: sin internet falla aquí, antes de escribir nada
             val members = if (renamed) {
                 firestore.collection("users").whereEqualTo("academyId", academy.id)
                     .get(Source.SERVER).await().documents
             } else emptyList()
-            val pendingCodes = if (renamed) {
+            val pendingCodes = if (renamed || cityChanged) {
                 invitationsRef.whereEqualTo("academyId", academy.id).whereEqualTo("used", false)
                     .get(Source.SERVER).await().documents
-                    .filter { it.getString("status") != InvitationStatus.REVOKED }
+                    .filter(::isOpen)
             } else emptyList()
 
             firestore.runTransaction { transaction ->
+                val codes = stillOpen(transaction, pendingCodes, stopIfDtCodeUsed = false)   // primero se lee, luego se escribe
                 transaction.update(
                     academyRef(academy.id),
                     mapOf(
                         "name" to newName,
-                        "city" to academy.city.trim(),
+                        "city" to newCity,
                         "institutionalEmail" to academy.institutionalEmail.trim(),
                         "logoBase64" to academy.logoBase64,
                         "callupNoticeHours" to academy.callupNoticeHours,
@@ -110,85 +120,177 @@ object AcademyRepository {
                     )
                 )
                 members.forEach { transaction.update(it.reference, "academyName", newName) }
-                pendingCodes.forEach { code ->
-                    // invitedByName solo se cambia en los códigos que creó la administración
-                    // (los de otros, como los del DT en la US-003, se dejan igual)
-                    if (code.getString("invitedByName") == adminInviterName(previousName)) {
-                        transaction.update(
-                            code.reference,
-                            mapOf("academyName" to newName, "invitedByName" to adminInviterName(newName))
-                        )
-                    } else {
-                        transaction.update(code.reference, "academyName", newName)
+                codes.forEach { code ->
+                    val changes = mutableMapOf<String, Any>()
+                    if (renamed) {
+                        changes["academyName"] = newName
+                        // invitedByName solo se cambia en los códigos que creó la administración
+                        // (los de otros, como los del DT en la US-003, se dejan igual)
+                        if (code.getString("invitedByName") == adminInviterName(previous.name)) {
+                            changes["invitedByName"] = adminInviterName(newName)
+                        }
                     }
+                    if (cityChanged) changes["city"] = newCity
+                    transaction.update(code.reference, changes)
                 }
             }.await()
             Result.success(Unit)
         } catch (e: Exception) {
-            Result.failure(Exception(FirebaseAuthManager.friendlyMessage(e)))
+            Result.failure(Exception(saveMessage(e)))
         }
     }
 
     // ---------------------------------------------------------------- Equipos
 
     // Crea (team.id vacío) o actualiza un equipo y, en la misma operación, su DT.
-    // currentCoachUids: DT activos que hoy tienen este equipo (normalmente 0 o 1).
     // Devuelve el ID del equipo.
+    // previousName: nombre antes de editar ("" si es nuevo). Si cambió, se actualiza la copia
+    // "teamName" en los códigos sin usar del equipo (es la que ve quien se registra con el código).
+    // coachChanged: false = el ADM no tocó "Cambiar" y no se toca a ningún DT.
     suspend fun saveTeam(
         academyId: String,
         team: Team,
-        coachUid: String,
-        currentCoachUids: List<String>
+        previousName: String,
+        coachChanged: Boolean,
+        coachUid: String
     ): Result<String> {
         return try {
             val isNew = team.id.isEmpty()
             val ref = if (isNew) teamsRef(academyId).document() else teamsRef(academyId).document(team.id)
+            val newName = team.name.trim()
             val data = mapOf(
-                "name" to team.name.trim(),
+                "name" to newName,
                 "category" to team.category,
                 "maxStarters" to team.maxStarters,
                 "maxSubstitutes" to team.maxSubstitutes
             )
+            val renamed = !isNew && newName != previousName
+            // Los DT actuales se consultan en el servidor (la lista del teléfono puede estar desactualizada)
+            val currentCoachUids = if (coachChanged && !isNew) teamCoachUids(academyId, team.id) else emptyList()
+            val assignsCoach = coachChanged && assignsNewCoach(coachUid, currentCoachUids)
+            // Un equipo nuevo aún no tiene códigos
+            val openCodes = if (!isNew && (renamed || assignsCoach)) pendingTeamCodes(academyId, team.id) else emptyList()
+
             firestore.runTransaction { transaction ->
+                // Primero todas las lecturas (Firestore lo exige), luego las escrituras
+                val codes = stillOpen(transaction, openCodes)
+                val change = if (coachChanged) readCoachChange(transaction, ref.id, coachUid, currentCoachUids) else null
+                // Los códigos de DT se anulan si se asigna un DT; esos ya no hace falta renombrarlos
+                val codesToRevoke = if (change?.toAssign != null) codes.filter { it.getString("role") == "DT" } else emptyList()
+
                 if (isNew) {
                     transaction.set(ref, data + mapOf("active" to true, "createdAt" to FieldValue.serverTimestamp()))
                 } else {
                     transaction.update(ref, data)
                 }
-                applyCoachChange(transaction, ref.id, coachUid, currentCoachUids)
+                if (renamed) {
+                    (codes - codesToRevoke.toSet()).forEach { transaction.update(it.reference, "teamName", newName) }
+                }
+                if (change != null) applyCoachChange(transaction, ref.id, change, codesToRevoke)
             }.await()
             Result.success(ref.id)
         } catch (e: Exception) {
-            Result.failure(Exception(FirebaseAuthManager.friendlyMessage(e)))
+            Result.failure(Exception(saveMessage(e)))
         }
     }
 
     // Cambia el DT de un equipo (coachUid "" = Sin DT)
-    suspend fun changeCoach(teamId: String, coachUid: String, currentCoachUids: List<String>): Result<Unit> {
+    suspend fun changeCoach(academyId: String, teamId: String, coachUid: String): Result<Unit> {
         return try {
+            val currentCoachUids = teamCoachUids(academyId, teamId)
+            val openDtCodes = if (assignsNewCoach(coachUid, currentCoachUids)) {
+                pendingTeamCodes(academyId, teamId).filter { it.getString("role") == "DT" }
+            } else emptyList()
             firestore.runTransaction { transaction ->
-                applyCoachChange(transaction, teamId, coachUid, currentCoachUids)
+                val codes = stillOpen(transaction, openDtCodes)
+                val change = readCoachChange(transaction, teamId, coachUid, currentCoachUids)
+                applyCoachChange(transaction, teamId, change, codes)
             }.await()
             Result.success(Unit)
         } catch (e: Exception) {
-            Result.failure(Exception(FirebaseAuthManager.friendlyMessage(e)))
+            Result.failure(Exception(saveMessage(e)))
         }
     }
 
-    // El DT de un equipo es el usuario DT activo cuyo teamId es el del equipo.
-    // Cambiar el DT = el DT anterior queda con teamId "" y el nuevo con el teamId del equipo.
-    // (Un DT dirige un solo equipo: si el nuevo dirigía otro, ese otro queda "Sin DT".)
-    private fun applyCoachChange(
+    private fun assignsNewCoach(coachUid: String, currentCoachUids: List<String>) =
+        coachUid.isNotEmpty() && coachUid !in currentCoachUids
+
+    // Códigos sin usar ni anular de un equipo (de DT y, desde la US-003, de jugador y apoderado).
+    // Consulta en el servidor: sin internet falla aquí, antes de escribir nada.
+    private suspend fun pendingTeamCodes(academyId: String, teamId: String): List<DocumentSnapshot> =
+        invitationsRef.whereEqualTo("academyId", academyId)
+            .whereEqualTo("teamId", teamId)
+            .get(Source.SERVER).await().documents
+            .filter(::isOpen)
+
+    // DT del equipo según el servidor: role DT, ese teamId y cuenta no desactivada
+    // (incluye al que aún no verifica su correo). Sin internet falla aquí, antes de escribir nada.
+    private suspend fun teamCoachUids(academyId: String, teamId: String): List<String> =
+        firestore.collection("users")
+            .whereEqualTo("academyId", academyId)
+            .whereEqualTo("role", "DT")
+            .whereEqualTo("teamId", teamId)
+            .get(Source.SERVER).await().documents
+            .filter { it.getString("status") != AccountStatus.INACTIVE }
+            .map { it.id }
+
+    private fun isOpen(code: DocumentSnapshot) =
+        code.getBoolean("used") != true && code.getString("status") != InvitationStatus.REVOKED
+
+    // Dentro de la transacción se vuelven a leer los códigos consultados antes.
+    // - Un código de DT que se usó entretanto: alguien acaba de registrarse como DT del equipo y se
+    //   cuenta con un DT que no está en la consulta. Se detiene todo ("Algo cambió…") para no dejar 2 DT.
+    // - Cualquier otro código usado o anulado entretanto se salta.
+    // stopIfDtCodeUsed = false (cambiar datos de la academia): ahí un DT nuevo no causa problemas.
+    private fun stillOpen(
+        transaction: Transaction,
+        codes: List<DocumentSnapshot>,
+        stopIfDtCodeUsed: Boolean = true
+    ): List<DocumentSnapshot> =
+        codes.map { transaction.get(it.reference) }.filter { fresh ->
+            if (stopIfDtCodeUsed && fresh.getString("role") == "DT" && fresh.getBoolean("used") == true) {
+                throw ChangedMeanwhileException()
+            }
+            isOpen(fresh)
+        }
+
+    // Cambio de DT leído dentro de la transacción:
+    // toClear = DT que dejan el equipo; toAssign = DT nuevo (null si no hay)
+    private class CoachChange(val toClear: List<String>, val toAssign: String?)
+
+    private fun readCoachChange(
         transaction: Transaction,
         teamId: String,
         coachUid: String,
         currentCoachUids: List<String>
-    ) {
-        currentCoachUids.filter { it != coachUid }.forEach { uid ->
-            transaction.update(userRef(uid), "teamId", "")
+    ): CoachChange {
+        // Se vuelven a leer los perfiles de los DT consultados: al que entretanto dejó el equipo
+        // (lo desactivaron o lo movieron) ya no hay que quitarlo
+        val toClear = currentCoachUids.filter { it != coachUid }
+            .filter { uid -> transaction.get(userRef(uid)).getString("teamId") == teamId }
+        val toAssign = if (assignsNewCoach(coachUid, currentCoachUids)) coachUid else null
+        // El DT elegido pudo ser desactivado mientras el ADM elegía
+        if (toAssign != null && transaction.get(userRef(toAssign)).getString("status") != AccountStatus.ACTIVE) {
+            throw ChangedMeanwhileException()
         }
-        if (coachUid.isNotEmpty() && coachUid !in currentCoachUids) {
-            transaction.update(userRef(coachUid), "teamId", teamId)
+        return CoachChange(toClear, toAssign)
+    }
+
+    // El DT de un equipo es el usuario DT (no desactivado) cuyo teamId es el del equipo.
+    // Cambiar el DT = el DT anterior queda con teamId "" y el nuevo con el teamId del equipo.
+    // (Un DT dirige un solo equipo: si el nuevo dirigía otro, ese otro queda "Sin DT".)
+    // Al asignar un DT se anulan, en la misma operación, los códigos de DT pendientes del equipo:
+    // si alguien usara uno después, el equipo quedaría con 2 DT.
+    private fun applyCoachChange(
+        transaction: Transaction,
+        teamId: String,
+        change: CoachChange,
+        codesToRevoke: List<DocumentSnapshot>
+    ) {
+        change.toClear.forEach { uid -> transaction.update(userRef(uid), "teamId", "") }
+        change.toAssign?.let { uid ->
+            transaction.update(userRef(uid), "teamId", teamId)
+            codesToRevoke.forEach { transaction.update(it.reference, "status", InvitationStatus.REVOKED) }
         }
     }
 
@@ -196,32 +298,45 @@ object AcademyRepository {
     // En la misma operación se anulan sus códigos pendientes (de DT y, desde la US-003, también
     // los de jugador y apoderado) y su DT queda sin equipo. Sus jugadores se quedan en el equipo
     // (el ADM los puede trasladar desde "Ver plantel").
-    // currentCoachUids: DT activos que hoy tienen este equipo.
-    suspend fun setTeamActive(
-        academyId: String,
-        teamId: String,
-        active: Boolean,
-        currentCoachUids: List<String>
-    ): Result<Unit> {
+    suspend fun setTeamActive(academyId: String, teamId: String, active: Boolean): Result<Unit> {
         return try {
-            // Consulta en el servidor: sin internet falla aquí, antes de escribir nada
-            val pendingCodes = if (!active) {
-                invitationsRef.whereEqualTo("academyId", academyId)
-                    .whereEqualTo("teamId", teamId)
-                    .get(Source.SERVER).await().documents
-                    .filter { it.getBoolean("used") != true && it.getString("status") != InvitationStatus.REVOKED }
-            } else emptyList()
+            val pendingCodes = if (!active) pendingTeamCodes(academyId, teamId) else emptyList()
+            // DT del equipo según el servidor (también el que aún no verifica su correo)
+            val currentCoachUids = if (!active) teamCoachUids(academyId, teamId) else emptyList()
 
             firestore.runTransaction { transaction ->
+                // Primero se lee (Firestore lo exige): solo los códigos que siguen abiertos
+                // y los DT que siguen en el equipo
+                val codes = stillOpen(transaction, pendingCodes)
+                val coaches = if (!active) {
+                    currentCoachUids.filter { uid -> transaction.get(userRef(uid)).getString("teamId") == teamId }
+                } else emptyList()
+
                 transaction.update(teamsRef(academyId).document(teamId), "active", active)
-                if (!active) {
-                    pendingCodes.forEach { transaction.update(it.reference, "status", InvitationStatus.REVOKED) }
-                    currentCoachUids.forEach { uid -> transaction.update(userRef(uid), "teamId", "") }
-                }
+                codes.forEach { transaction.update(it.reference, "status", InvitationStatus.REVOKED) }
+                coaches.forEach { uid -> transaction.update(userRef(uid), "teamId", "") }
             }.await()
             Result.success(Unit)
         } catch (e: Exception) {
-            Result.failure(Exception(FirebaseAuthManager.friendlyMessage(e)))
+            Result.failure(Exception(saveMessage(e)))
+        }
+    }
+
+    // Algo cambió entre la consulta y la escritura (por ejemplo, desactivaron al DT elegido)
+    private class ChangedMeanwhileException : Exception(CHANGED_MEANWHILE_MESSAGE)
+
+    const val CHANGED_MEANWHILE_MESSAGE = "Algo cambió mientras guardabas. Inténtalo de nuevo."
+
+    // Mensaje de las operaciones que escriben varios documentos a la vez: "Algo cambió…" solo si la
+    // app detectó un cambio entre la consulta y la escritura, o si Firestore abortó la transacción
+    // por cambios simultáneos (ABORTED). Cualquier otro error (también un permiso negado) usa el
+    // mensaje de siempre.
+    private fun saveMessage(e: Exception): String {
+        val firestoreCode = (e as? FirebaseFirestoreException ?: e.cause as? FirebaseFirestoreException)?.code
+        return when {
+            e is ChangedMeanwhileException || e.cause is ChangedMeanwhileException -> CHANGED_MEANWHILE_MESSAGE
+            firestoreCode == FirebaseFirestoreException.Code.ABORTED -> CHANGED_MEANWHILE_MESSAGE
+            else -> FirebaseAuthManager.friendlyMessage(e)
         }
     }
 
@@ -251,6 +366,15 @@ object AcademyRepository {
     // Mismo formato que lee la US-001 (InvitationRepository). Devuelve el código.
     suspend fun createDtInvitation(academy: Academy, team: Team, admin: UserProfile): Result<String> {
         return try {
+            // Segunda barrera (la lista del teléfono puede estar desactualizada): un solo DT por equipo.
+            // Si el equipo ya tiene DT (aunque aún no verifique su correo) o un código de DT
+            // pendiente, no se crea otro.
+            val now = Date()
+            val hasPendingCode = pendingTeamCodes(academy.id, team.id)
+                .any { it.getString("role") == "DT" && (it.getTimestamp("expiresAt")?.toDate()?.after(now) ?: true) }
+            val hasCoach = teamCoachUids(academy.id, team.id).isNotEmpty()
+            if (hasPendingCode || hasCoach) throw IllegalStateException(COACH_TAKEN_MESSAGE)
+
             val prefix = codePrefix(academy.name)
             val expiresAt = Timestamp(Date(System.currentTimeMillis() + INVITATION_VALID_DAYS * 24L * 60 * 60 * 1000))
             val data = hashMapOf(
@@ -291,6 +415,8 @@ object AcademyRepository {
         throw IllegalStateException("No se pudo generar el código. Inténtalo de nuevo.")
     }
 
+    const val COACH_TAKEN_MESSAGE = "Este equipo ya tiene DT (o un código pendiente). Anúlalo o cambia el DT primero."
+
     // Texto "invitado por …" de los códigos que crea el ADM (la regla usa el mismo texto)
     fun adminInviterName(academyName: String) = "la administración de $academyName"
 
@@ -322,8 +448,9 @@ object AcademyRepository {
     private const val PREFIX_FILL_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ"
     private val secureRandom = SecureRandom()
 
-    // Palabras que no sirven para el prefijo ("Academia Los Halcones" -> HALC)
-    private val SKIP_WORDS = setOf("ACADEMIA", "ESCUELA", "CLUB", "DE", "DEL", "LA", "LAS", "LOS", "EL", "FC", "CF")
+    // Palabras que no sirven para el prefijo ("Academia Los Halcones" -> HALC): la misma lista
+    // que las iniciales de la academia (Academy.kt)
+    private val SKIP_WORDS = ACADEMY_TYPE_WORDS + ACADEMY_ARTICLE_WORDS
 
     private fun randomPart(length: Int = 6, alphabet: String = CODE_ALPHABET): String =
         (1..length).map { alphabet[secureRandom.nextInt(alphabet.length)] }.joinToString("")
@@ -335,7 +462,7 @@ object AcademyRepository {
             .uppercase()
             .split(Regex("[^A-Z]+"))
             .filter { it.isNotEmpty() }
-        val significant = words.filter { it !in SKIP_WORDS }.ifEmpty { words }
+        val significant = words.filter { it.lowercase() !in SKIP_WORDS }.ifEmpty { words }
         val letters = significant.joinToString("").take(4)
         return letters + randomPart(4 - letters.length, PREFIX_FILL_ALPHABET)
     }

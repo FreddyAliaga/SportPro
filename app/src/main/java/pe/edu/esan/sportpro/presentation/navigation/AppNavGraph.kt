@@ -1,15 +1,26 @@
 package pe.edu.esan.sportpro.presentation.navigation
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import pe.edu.esan.sportpro.presentation.academy.AcademyFormScreen
 import pe.edu.esan.sportpro.presentation.academy.AcademyTeamsScreen
 import pe.edu.esan.sportpro.presentation.academy.AcademyViewModel
@@ -37,6 +48,8 @@ import pe.edu.esan.sportpro.presentation.player.PlayerFormScreen
 import pe.edu.esan.sportpro.presentation.player.PlayerViewModel
 import pe.edu.esan.sportpro.presentation.player.PrivateFormScreen
 import pe.edu.esan.sportpro.presentation.player.RosterScreen
+import pe.edu.esan.sportpro.presentation.components.SportProDialog
+import pe.edu.esan.sportpro.ui.theme.TextoPrincipal
 
 @Composable
 fun AppNavGraph() {
@@ -49,13 +62,47 @@ fun AppNavGraph() {
     // US-003: plantel y perfil del jugador (DT, ADM, PAD y JUG)
     val playerViewModel: PlayerViewModel = viewModel()
 
-    // Cierra la sesión y vuelve a la bienvenida sin dejar pantallas en el historial
-    val signOut: () -> Unit = {
+    val closeSession: () -> Unit = {
         academyViewModel.stop()
         playerViewModel.stop()
         loginViewModel.signOut()
         registerViewModel.signOutAndReset()
+    }
+
+    // Cierra la sesión y vuelve a la bienvenida sin dejar pantallas en el historial
+    val signOut: () -> Unit = {
+        closeSession()
         navController.goTo("welcome")
+    }
+
+    // US-002: si el ADM desactiva la cuenta con la sesión abierta, se cierra la sesión
+    // y se explica el motivo en "Iniciar sesión" (atrás vuelve a la bienvenida)
+    LaunchedEffect(Unit) {
+        loginViewModel.uiState.collect { state ->
+            state.sessionEndedMessage?.let { message ->
+                closeSession()
+                loginViewModel.showMessage(message)
+                navController.goTo("welcome")
+                navController.navigate("login")
+            }
+        }
+    }
+
+    // Tras un cierre de la app por Android no se pudo volver a cargar el perfil: se ofrece reintentar
+    val profileError by remember {
+        loginViewModel.uiState.map { it.profileError }.distinctUntilChanged()
+    }.collectAsState(initial = null)
+    profileError?.let { message ->
+        SportProDialog(
+            title = "No pudimos cargar tu cuenta",
+            confirmText = "Reintentar",
+            onConfirm = loginViewModel::ensureProfile,
+            onDismiss = signOut,
+            dismissText = "Cerrar sesión",
+            dismissOnOutsideTap = false
+        ) {
+            Text(message, color = TextoPrincipal, style = MaterialTheme.typography.bodyLarge)
+        }
     }
 
     NavHost(
@@ -189,9 +236,10 @@ fun AppNavGraph() {
         // ---------- US-002 · Academia y equipos / Usuarios e invitaciones (ADM con sesión) ----------
         composable("academy") {
             StartAcademy(loginViewModel, academyViewModel)
+            val back = backClearingMessages(navController, academyViewModel::clearMessages)
             AcademyTeamsScreen(
                 viewModel = academyViewModel,
-                onBack = { navController.popBackStack() },
+                onBack = back,
                 onEditAcademy = {
                     academyViewModel.startEditAcademy()
                     navController.navigate("academy_edit")
@@ -202,7 +250,7 @@ fun AppNavGraph() {
                 },
                 onEditTeam = { team ->
                     academyViewModel.startEditTeam(team)
-                    navController.navigate("academy_team")
+                    navController.navigate("academy_team?teamId=${team.id}")
                 },
                 onOpenRoster = { team ->
                     // US-003: el ADM ve el plantel del equipo con las mismas acciones del DT.
@@ -216,8 +264,11 @@ fun AppNavGraph() {
         }
         composable("academy_edit") {
             StartAcademy(loginViewModel, academyViewModel)
+            val back = backClearingMessages(navController, academyViewModel::clearMessages)
             val state by academyViewModel.uiState.collectAsState()
             val resolver = LocalContext.current.contentResolver
+            // Si Android cerró la app, el formulario se vuelve a llenar cuando llega la academia
+            LaunchedEffect(state.academy != null) { academyViewModel.restoreAcademyForm() }
             AcademyFormScreen(
                 title = "Editar academia",
                 subtitle = "Los cambios se ven al instante en toda tu academia.",
@@ -231,7 +282,7 @@ fun AppNavGraph() {
                 step = 0,
                 onFormChange = academyViewModel::onAcademyFormChange,
                 onLogoPicked = { uri -> academyViewModel.onLogoPicked(resolver, uri) },
-                onBack = { navController.popBackStack() },
+                onBack = back,
                 onSubmit = {
                     academyViewModel.saveAcademy {
                         loginViewModel.loadProfile()   // el menú muestra el nombre nuevo de la academia
@@ -240,33 +291,52 @@ fun AppNavGraph() {
                 }
             )
         }
-        composable("academy_team") {
+        // "Nuevo equipo" = academy_team; "Editar equipo" = academy_team?teamId=… (el id en la ruta
+        // sirve para volver a cargar el equipo si Android cerró la app)
+        composable(
+            "academy_team?teamId={teamId}",
+            arguments = listOf(navArgument("teamId") { type = NavType.StringType; defaultValue = "" })
+        ) { backStackEntry ->
             StartAcademy(loginViewModel, academyViewModel)
+            val back = backClearingMessages(navController, academyViewModel::clearMessages)
+            val teamId = backStackEntry.arguments?.getString("teamId").orEmpty()
+            val teamsLoaded = academyViewModel.uiState.collectAsState().value.teamsLoaded
+            LaunchedEffect(teamId, teamsLoaded) {
+                if (!academyViewModel.restoreTeamForm(teamId)) navController.popBackStack()
+            }
             TeamFormScreen(
                 viewModel = academyViewModel,
-                onBack = { navController.popBackStack() },
+                onBack = back,
                 onSaved = { navController.popBackStack() },
-                onInvitationCreated = { navController.navigate("academy_invite") }
+                onInvitationCreated = { navController.navigateToInvite(academyViewModel) }
             )
         }
         composable("academy_users") {
             StartAcademy(loginViewModel, academyViewModel)
+            val back = backClearingMessages(navController, academyViewModel::clearMessages)
             UsersInvitationsScreen(
                 viewModel = academyViewModel,
-                onBack = { navController.popBackStack() },
-                onInvitationCreated = { navController.navigate("academy_invite") }
+                onBack = back,
+                onInvitationCreated = { navController.navigateToInvite(academyViewModel) }
             )
         }
-        composable("academy_invite") {
+        composable("academy_invite/{code}") { backStackEntry ->
+            StartAcademy(loginViewModel, academyViewModel)
+            val code = backStackEntry.arguments?.getString("code").orEmpty()
+            val invitationsLoaded = academyViewModel.uiState.collectAsState().value.invitationsLoaded
+            LaunchedEffect(code, invitationsLoaded) {
+                if (!academyViewModel.restoreGeneratedCode(code)) navController.popBackStack()
+            }
             InviteCoachScreen(viewModel = academyViewModel, onDone = { navController.popBackStack() })
         }
 
         // ---------- US-003 · Plantel y perfil del jugador (DT y ADM) ----------
         composable("roster") {
             StartPlayers(loginViewModel, playerViewModel)
+            val back = backClearingMessages(navController, playerViewModel::clearMessages)
             RosterScreen(
                 viewModel = playerViewModel,
-                onBack = { navController.popBackStack() },
+                onBack = back,
                 onNewPlayer = {
                     playerViewModel.startNewPlayer()
                     navController.navigate("player_new")
@@ -279,9 +349,10 @@ fun AppNavGraph() {
         }
         composable("player_new") {
             StartPlayers(loginViewModel, playerViewModel)
+            val back = backClearingMessages(navController, playerViewModel::clearMessages)
             PlayerFormScreen(
                 viewModel = playerViewModel,
-                onBack = { navController.popBackStack() },
+                onBack = back,
                 onSaved = { playerId ->
                     // Se abre el perfil del jugador nuevo (para invitar a su apoderado) en lugar del formulario
                     playerViewModel.selectPlayer(playerId)
@@ -291,9 +362,10 @@ fun AppNavGraph() {
         }
         composable("player_detail") {
             StartPlayers(loginViewModel, playerViewModel)
+            val back = backClearingMessages(navController, playerViewModel::clearMessages)
             PlayerDetailScreen(
                 viewModel = playerViewModel,
-                onBack = { navController.popBackStack() },
+                onBack = back,
                 onEditSport = {
                     playerViewModel.startEditSport()
                     navController.navigate("player_edit")
@@ -309,11 +381,12 @@ fun AppNavGraph() {
         }
         composable("player_private") {
             StartPlayers(loginViewModel, playerViewModel)
+            val back = backClearingMessages(navController, playerViewModel::clearMessages)
             val resolver = LocalContext.current.contentResolver
             PrivateFormScreen(
                 viewModel = playerViewModel,
                 onPhotoPicked = { uri -> playerViewModel.onPhotoPicked(resolver, uri) },
-                onBack = { navController.popBackStack() },
+                onBack = back,
                 onSaved = { navController.popBackStack() }
             )
         }
@@ -321,9 +394,10 @@ fun AppNavGraph() {
         // ---------- US-003 · Mis jugadores (PAD) ----------
         composable("my_players") {
             StartPlayers(loginViewModel, playerViewModel)
+            val back = backClearingMessages(navController, playerViewModel::clearMessages)
             MyPlayersScreen(
                 viewModel = playerViewModel,
-                onBack = { navController.popBackStack() },
+                onBack = back,
                 onOpenPlayer = { player ->
                     playerViewModel.selectPlayer(player.id)
                     navController.navigate("player_detail")
@@ -336,17 +410,19 @@ fun AppNavGraph() {
         }
         composable("link_player") {
             StartPlayers(loginViewModel, playerViewModel)
+            val back = backClearingMessages(navController, playerViewModel::clearMessages)
             LinkPlayerScreen(
                 viewModel = playerViewModel,
-                onBack = { navController.popBackStack() },
+                onBack = back,
                 onLinked = { navController.popBackStack() }
             )
         }
         composable("player_edit") {
             StartPlayers(loginViewModel, playerViewModel)
+            val back = backClearingMessages(navController, playerViewModel::clearMessages)
             PlayerFormScreen(
                 viewModel = playerViewModel,
-                onBack = { navController.popBackStack() },
+                onBack = back,
                 onSaved = { navController.popBackStack() }
             )
         }
@@ -386,12 +462,39 @@ private fun NavController.goTo(route: String) {
     }
 }
 
-// US-002: las pantallas del ADM escuchan la academia del perfil con sesión (academyId del UserProfile)
+// US-002: pantalla del código recién generado (el código va en la ruta por si Android cierra la app)
+private fun NavController.navigateToInvite(academyViewModel: AcademyViewModel) {
+    navigate("academy_invite/${academyViewModel.uiState.value.generatedCode}")
+}
+
+// Mensajes de la última acción (US-002 y US-003): se borran al entrar a una pantalla por primera vez
+// y al volver atrás sin guardar, para que no aparezcan en otra pantalla. Si se vuelve porque se
+// guardó (onSaved), el mensaje "¡Listo!" sí se ve en la pantalla anterior.
+// Devuelve la acción "atrás" (flecha de la pantalla y botón atrás del teléfono).
+@Composable
+private fun backClearingMessages(navController: NavController, clearMessages: () -> Unit): () -> Unit {
+    var entered by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        if (!entered) {
+            entered = true
+            clearMessages()
+        }
+    }
+    val back: () -> Unit = {
+        clearMessages()
+        navController.popBackStack()
+    }
+    BackHandler(onBack = back)
+    return back
+}
+
+// US-002: las pantallas del ADM escuchan la academia del perfil con sesión (academyId del UserProfile).
+// Si no hay perfil (Android cerró la app), se vuelve a cargar.
 @Composable
 private fun StartAcademy(loginViewModel: LoginViewModel, academyViewModel: AcademyViewModel) {
     val profile = loginViewModel.uiState.collectAsState().value.profile
     LaunchedEffect(profile) {
-        if (profile != null) academyViewModel.start(profile)
+        if (profile != null) academyViewModel.start(profile) else loginViewModel.ensureProfile()
     }
 }
 
@@ -400,6 +503,6 @@ private fun StartAcademy(loginViewModel: LoginViewModel, academyViewModel: Acade
 private fun StartPlayers(loginViewModel: LoginViewModel, playerViewModel: PlayerViewModel) {
     val profile = loginViewModel.uiState.collectAsState().value.profile
     LaunchedEffect(profile) {
-        if (profile != null) playerViewModel.start(profile)
+        if (profile != null) playerViewModel.start(profile) else loginViewModel.ensureProfile()
     }
 }

@@ -17,6 +17,7 @@ import pe.edu.esan.sportpro.data.model.AcademyForm
 import pe.edu.esan.sportpro.data.model.AcademyFormErrors
 import pe.edu.esan.sportpro.data.model.validateAcademyForm
 import pe.edu.esan.sportpro.data.model.DtInvitation
+import pe.edu.esan.sportpro.data.model.InvitationState
 import pe.edu.esan.sportpro.data.model.TEAM_CATEGORIES
 import pe.edu.esan.sportpro.data.model.Team
 import pe.edu.esan.sportpro.data.model.UserProfile
@@ -32,7 +33,8 @@ data class TeamForm(
     val category: String = TEAM_CATEGORIES.first(),
     val maxStarters: String = "11",
     val maxSubstitutes: String = "12",
-    val coachUid: String = ""          // "" = Sin DT
+    val coachUid: String = "",         // "" = Sin DT
+    val coachChanged: Boolean = false  // true = el ADM tocó "Cambiar" (si no, no se toca a ningún DT)
 )
 
 data class TeamFormErrors(
@@ -51,10 +53,15 @@ data class AcademyUiState(
     val teams: List<Team> = emptyList(),
     val members: List<UserProfile> = emptyList(),
     val invitations: List<DtInvitation> = emptyList(),
+    // Ya llegó la primera lectura de cada lista (mientras tanto se muestra la carga, no "vacío")
+    val teamsLoaded: Boolean = false,
+    val membersLoaded: Boolean = false,
+    val invitationsLoaded: Boolean = false,
     // Un error por fuente ("academia", "equipos", "usuarios", "códigos"): que una lista
     // cargue bien no borra el error de otra
     val loadErrors: Map<String, String> = emptyMap(),
-    // Editar academia
+    // Editar academia (editingAcademy = el formulario ya se llenó con los datos de la academia)
+    val editingAcademy: Boolean = false,
     val academyForm: AcademyForm = AcademyForm(),
     val academyErrors: AcademyFormErrors = AcademyFormErrors(),
     val logoLoading: Boolean = false,
@@ -67,6 +74,8 @@ data class AcademyUiState(
     // Filtro de "Usuarios" (null = Todos)
     val roleFilter: String? = null,
     val isLoading: Boolean = false,
+    // Carga aparte para "Invitar DT" (así "Guardar equipo" no muestra carga al invitar)
+    val invitationLoading: Boolean = false,
     val errorMessage: String? = null,
     val infoMessage: String? = null
 ) {
@@ -75,10 +84,25 @@ data class AcademyUiState(
     // Primer error de lectura pendiente (null si todo cargó bien)
     val loadError: String? get() = loadErrors.values.firstOrNull()
 
-    // DT del equipo = usuarios DT activos con ese teamId (normalmente 0 o 1)
+    // DT del equipo = usuarios DT con ese teamId cuya cuenta NO está desactivada (normalmente 0 o 1).
+    // Incluye al DT que aún no verifica su correo: al verificarlo ya dirige el equipo.
     fun coachesOf(teamId: String): List<UserProfile> =
         if (teamId.isEmpty()) emptyList()
-        else members.filter { it.role == "DT" && it.status == AccountStatus.ACTIVE && it.teamId == teamId }
+        else members.filter { it.role == "DT" && it.status != AccountStatus.INACTIVE && it.teamId == teamId }
+
+    // Código de DT pendiente (sin usar, sin anular y sin vencer) de un equipo, o null
+    fun pendingDtCodeOf(teamId: String): DtInvitation? =
+        invitations.firstOrNull { it.role == "DT" && it.teamId == teamId && it.state() == InvitationState.PENDING }
+
+    // DT que muestra "Editar equipo": el elegido con "Cambiar" o, si no se tocó, el DT actual
+    val teamFormCoachUid: String
+        get() = if (teamForm.coachChanged) teamForm.coachUid else coachesOf(teamForm.id).firstOrNull()?.uid.orEmpty()
+
+    fun isTeamActive(teamId: String): Boolean = teams.firstOrNull { it.id == teamId }?.active == true
+
+    // Solo se invita a un DT para un equipo activo, sin DT y sin otro código de DT pendiente
+    fun canInviteCoach(teamId: String): Boolean =
+        isTeamActive(teamId) && coachesOf(teamId).isEmpty() && pendingDtCodeOf(teamId) == null
 
     // DT que se pueden asignar a un equipo
     val activeCoaches: List<UserProfile>
@@ -111,6 +135,8 @@ data class AcademyUiState(
     }
 }
 
+private const val INACTIVE_TEAM_COACH_MESSAGE = "Ese equipo está desactivado. Reactívalo para asignarle un DT."
+
 class AcademyViewModel : ViewModel() {
 
     private val _uiState = MutableStateFlow(AcademyUiState())
@@ -130,9 +156,11 @@ class AcademyViewModel : ViewModel() {
         val id = profile.academyId
         listenJobs = listOf(
             listen("academia", AcademyRepository.academyFlow(id)) { state, academy -> state.copy(academy = academy) },
-            listen("equipos", AcademyRepository.teamsFlow(id)) { state, teams -> state.copy(teams = teams) },
-            listen("usuarios", AcademyRepository.membersFlow(id)) { state, members -> state.copy(members = members) },
-            listen("códigos", AcademyRepository.dtInvitationsFlow(id)) { state, invitations -> state.copy(invitations = invitations) }
+            listen("equipos", AcademyRepository.teamsFlow(id)) { state, teams -> state.copy(teams = teams, teamsLoaded = true) },
+            listen("usuarios", AcademyRepository.membersFlow(id)) { state, members -> state.copy(members = members, membersLoaded = true) },
+            listen("códigos", AcademyRepository.dtInvitationsFlow(id)) { state, invitations ->
+                state.copy(invitations = invitations, invitationsLoaded = true)
+            }
         )
     }
 
@@ -170,8 +198,38 @@ class AcademyViewModel : ViewModel() {
     fun startEditAcademy() {
         val academy = _uiState.value.academy ?: return
         _uiState.update {
-            it.copy(academyForm = academy.toForm(), academyErrors = AcademyFormErrors(), errorMessage = null, infoMessage = null)
+            it.copy(
+                editingAcademy = true,
+                academyForm = academy.toForm(),
+                academyErrors = AcademyFormErrors(),
+                errorMessage = null,
+                infoMessage = null
+            )
         }
+    }
+
+    // ---------- Si Android cerró la app (process death) ----------
+    // Al volver, el ViewModel está vacío: cada pantalla recarga sus datos con el id de su ruta
+    // cuando llegan las listas. Devuelven false si ya no existe (la pantalla vuelve a la lista).
+
+    fun restoreAcademyForm() {
+        if (!_uiState.value.editingAcademy) startEditAcademy()   // no hace nada hasta que llegue la academia
+    }
+
+    fun restoreTeamForm(teamId: String): Boolean {
+        val state = _uiState.value
+        if (teamId.isEmpty() || state.teamForm.id == teamId || !state.teamsLoaded) return true
+        val team = state.teams.firstOrNull { it.id == teamId } ?: return false
+        startEditTeam(team)
+        return true
+    }
+
+    fun restoreGeneratedCode(code: String): Boolean {
+        val state = _uiState.value
+        if (state.generatedCode == code || !state.invitationsLoaded) return true
+        val invitation = state.invitations.firstOrNull { it.code == code } ?: return false
+        _uiState.update { it.copy(generatedCode = invitation.code, generatedTeamName = invitation.teamName) }
+        return true
     }
 
     fun onAcademyFormChange(form: AcademyForm) {
@@ -201,7 +259,7 @@ class AcademyViewModel : ViewModel() {
 
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
-            val result = AcademyRepository.updateAcademy(state.academyForm.toAcademy(academy.id), previousName = academy.name)
+            val result = AcademyRepository.updateAcademy(state.academyForm.toAcademy(academy.id), previous = academy)
             _uiState.update {
                 it.copy(
                     isLoading = false,
@@ -218,8 +276,9 @@ class AcademyViewModel : ViewModel() {
         _uiState.update { it.copy(teamForm = TeamForm(), teamErrors = TeamFormErrors(), errorMessage = null, infoMessage = null) }
     }
 
+    // El DT no se copia al formulario: se muestra el DT actual (teamFormCoachUid) y solo se cambia
+    // si el ADM toca "Cambiar". Así, si el equipo tenía 2 DT, guardar no saca a uno sin avisar.
     fun startEditTeam(team: Team) {
-        val coachUid = _uiState.value.coachesOf(team.id).firstOrNull()?.uid.orEmpty()
         _uiState.update {
             it.copy(
                 teamForm = TeamForm(
@@ -227,8 +286,7 @@ class AcademyViewModel : ViewModel() {
                     name = team.name,
                     category = team.category,
                     maxStarters = team.maxStarters.toString(),
-                    maxSubstitutes = team.maxSubstitutes.toString(),
-                    coachUid = coachUid
+                    maxSubstitutes = team.maxSubstitutes.toString()
                 ),
                 teamErrors = TeamFormErrors(),
                 errorMessage = null,
@@ -258,6 +316,11 @@ class AcademyViewModel : ViewModel() {
         )
         _uiState.update { it.copy(teamErrors = errors) }
         if (errors.hasErrors || state.isLoading) return
+        // A un equipo desactivado no se le asigna DT (la regla también lo impide)
+        if (form.id.isNotEmpty() && !state.isTeamActive(form.id) && form.coachChanged && form.coachUid.isNotEmpty()) {
+            _uiState.update { it.copy(errorMessage = INACTIVE_TEAM_COACH_MESSAGE, infoMessage = null) }
+            return
+        }
 
         val team = Team(
             id = form.id,
@@ -266,10 +329,11 @@ class AcademyViewModel : ViewModel() {
             maxStarters = starters ?: 11,
             maxSubstitutes = substitutes ?: 12
         )
-        val currentCoaches = state.coachesOf(form.id).map { it.uid }
+        val previousName = state.teams.firstOrNull { it.id == form.id }?.name.orEmpty()
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
-            val result = AcademyRepository.saveTeam(state.academyId, team, form.coachUid, currentCoaches)
+            // Los DT actuales los consulta el repositorio en el servidor
+            val result = AcademyRepository.saveTeam(state.academyId, team, previousName, form.coachChanged, form.coachUid)
             _uiState.update {
                 it.copy(
                     isLoading = false,
@@ -283,11 +347,18 @@ class AcademyViewModel : ViewModel() {
 
     // Cambiar el DT desde la lista de equipos (coachUid "" = Sin DT)
     fun changeCoach(team: Team, coachUid: String) {
-        if (_uiState.value.isLoading) return   // evita el doble toque
-        val currentCoaches = _uiState.value.coachesOf(team.id).map { it.uid }
+        val state = _uiState.value
+        if (state.isLoading) return   // evita el doble toque
+        if (!state.isTeamActive(team.id)) {
+            _uiState.update { it.copy(errorMessage = INACTIVE_TEAM_COACH_MESSAGE, infoMessage = null) }
+            return
+        }
+        val currentCoaches = state.coachesOf(team.id).map { it.uid }
+        // Eligió al mismo DT (o "Sin DT" y no tenía): no hay nada que cambiar
+        if (currentCoaches == listOfNotNull(coachUid.ifEmpty { null })) return
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null, infoMessage = null) }
-            val result = AcademyRepository.changeCoach(team.id, coachUid, currentCoaches)
+            val result = AcademyRepository.changeCoach(state.academyId, team.id, coachUid)
             _uiState.update {
                 it.copy(
                     isLoading = false,
@@ -302,10 +373,9 @@ class AcademyViewModel : ViewModel() {
     fun setTeamActive(team: Team, active: Boolean, onDone: () -> Unit) {
         val state = _uiState.value
         if (state.isLoading) return   // evita el doble toque
-        val currentCoaches = state.coachesOf(team.id).map { it.uid }
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null, infoMessage = null) }
-            val result = AcademyRepository.setTeamActive(state.academyId, team.id, active, currentCoaches)
+            val result = AcademyRepository.setTeamActive(state.academyId, team.id, active)
             _uiState.update {
                 it.copy(
                     isLoading = false,
@@ -347,18 +417,23 @@ class AcademyViewModel : ViewModel() {
         val state = _uiState.value
         val academy = state.academy ?: return
         val admin = state.admin ?: return
-        if (state.isLoading) return   // evita el doble toque
+        if (state.invitationLoading) return   // evita el doble toque
         // No se invita a equipos desactivados (la regla también lo impide)
-        if (state.teams.firstOrNull { it.id == team.id }?.active != true) {
+        if (!state.isTeamActive(team.id)) {
             _uiState.update { it.copy(errorMessage = "Ese equipo está desactivado. Reactívalo para invitar a su DT.", infoMessage = null) }
             return
         }
+        // Un solo DT por equipo: si ya tiene DT o un código de DT pendiente, no se genera otro
+        if (!state.canInviteCoach(team.id)) {
+            _uiState.update { it.copy(errorMessage = AcademyRepository.COACH_TAKEN_MESSAGE, infoMessage = null) }
+            return
+        }
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, errorMessage = null, infoMessage = null) }
+            _uiState.update { it.copy(invitationLoading = true, errorMessage = null, infoMessage = null) }
             val result = AcademyRepository.createDtInvitation(academy, team, admin)
             _uiState.update {
                 it.copy(
-                    isLoading = false,
+                    invitationLoading = false,
                     errorMessage = result.exceptionOrNull()?.message,
                     generatedCode = result.getOrNull() ?: it.generatedCode,
                     generatedTeamName = if (result.isSuccess) team.name else it.generatedTeamName

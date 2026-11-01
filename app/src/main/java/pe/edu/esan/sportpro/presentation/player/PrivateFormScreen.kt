@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import pe.edu.esan.sportpro.data.model.PrivacyTexts
 import pe.edu.esan.sportpro.data.model.toBirthText
+import pe.edu.esan.sportpro.presentation.components.Messages
 import pe.edu.esan.sportpro.presentation.components.InfoBox
 import pe.edu.esan.sportpro.presentation.components.LogoPicker
 import pe.edu.esan.sportpro.presentation.components.PrimaryButton
@@ -138,7 +139,7 @@ fun PrivateFormScreen(
             }
         }
 
-        PlayerMessages(state)
+        Messages(state.errorMessage, state.infoMessage)
         Spacer(Modifier.height(20.dp))
         PrimaryButton("Guardar datos", onClick = { viewModel.savePrivate(onSaved) }, loading = state.isLoading)
     }

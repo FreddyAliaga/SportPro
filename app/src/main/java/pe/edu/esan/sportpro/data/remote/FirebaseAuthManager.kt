@@ -14,6 +14,9 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.Source
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
 import pe.edu.esan.sportpro.data.model.AccountStatus
 import pe.edu.esan.sportpro.data.model.Academy
@@ -84,7 +87,9 @@ object FirebaseAuthManager {
                     "invitationCode" to invitation.code,
                     "role" to invitation.role,
                     "academyId" to invitation.academyId,
-                    "academyName" to invitation.academyName,
+                    // El nombre leído en ESTA transacción (si la academia se renombró después del paso 1,
+                    // el código ya tiene el nombre nuevo y la regla exige el nombre real)
+                    "academyName" to (snapshot.getString("academyName") ?: invitation.academyName),
                     "teamId" to invitation.teamId,
                     "playerId" to invitation.playerId,
                     "status" to AccountStatus.PENDING_VERIFICATION,
@@ -336,11 +341,28 @@ object FirebaseAuthManager {
         return try {
             val uid = auth.currentUser?.uid ?: throw Exception("No hay una sesión activa.")
             val doc = firestore.collection("users").document(uid).get().await()
-            if (!doc.exists()) throw Exception("No encontramos tu perfil en SportPro.")
+            if (!doc.exists()) throw Exception(PROFILE_NOT_FOUND_MESSAGE)
             Result.success(doc.toUserProfile())
         } catch (e: Exception) {
             Result.failure(Exception(friendlyMessage(e)))
         }
+    }
+
+    // US-002: escucha el perfil propio mientras hay sesión (el ADM puede desactivar la cuenta o
+    // cambiar el equipo de un DT). Solo emite lo que confirma el servidor (no la copia guardada en el
+    // teléfono); null = el perfil ya no existe. Sin conexión no emite nada y sigue escuchando.
+    fun currentProfileFlow(): Flow<UserProfile?> = callbackFlow {
+        val uid = auth.currentUser?.uid
+        if (uid == null) {
+            close()
+            return@callbackFlow
+        }
+        val registration = firestore.collection("users").document(uid).addSnapshotListener { snapshot, error ->
+            if (error == null && snapshot != null && !snapshot.metadata.isFromCache) {
+                trySend(if (snapshot.exists()) snapshot.toUserProfile() else null)
+            }
+        }
+        awaitClose { registration.remove() }
     }
 
     fun currentEmail(): String = auth.currentUser?.email ?: ""
@@ -359,6 +381,11 @@ object FirebaseAuthManager {
     }
 
     const val NO_CONNECTION_MESSAGE = "No hay conexión a internet. Revísala e inténtalo de nuevo."
+
+    const val PROFILE_NOT_FOUND_MESSAGE = "No encontramos tu perfil en SportPro."
+
+    // US-002: la sesión sigue abierta pero el perfil ya no existe (o no hay sesión)
+    const val ACCOUNT_NOT_FOUND_MESSAGE = "No encontramos tu cuenta. Inicia sesión de nuevo."
 
     // US-003: el jugador del código no existe (solo al usar un código: registro y "Vincular otro jugador")
     const val CODE_DATA_NOT_FOUND_MESSAGE =

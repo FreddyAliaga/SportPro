@@ -25,6 +25,7 @@ import pe.edu.esan.sportpro.presentation.components.ErrorBox
 import pe.edu.esan.sportpro.presentation.components.InfoBox
 import pe.edu.esan.sportpro.presentation.components.LogoPicker
 import pe.edu.esan.sportpro.presentation.components.PrimaryButton
+import pe.edu.esan.sportpro.presentation.components.SectionLabel
 import pe.edu.esan.sportpro.presentation.components.SportProCard
 import pe.edu.esan.sportpro.presentation.components.SportProScreen
 import pe.edu.esan.sportpro.presentation.components.SportProTextField
@@ -116,7 +117,7 @@ fun AcademyFormScreen(
         }
 
         Spacer(Modifier.height(20.dp))
-        Text("PLAZOS DE CONVOCATORIA", fontSize = 14.sp, fontWeight = FontWeight.ExtraBold, color = TextoSobreSuave)
+        SectionLabel("Plazos de convocatoria")
         Spacer(Modifier.height(10.dp))
         SportProCard {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {

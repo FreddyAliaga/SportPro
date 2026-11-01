@@ -26,7 +26,11 @@ data class LoginUiState(
     val resetEmail: String = "",
     val resetEmailError: String? = null,
     val resetSent: Boolean = false,
-    val profile: UserProfile? = null
+    val profile: UserProfile? = null,
+    // US-002: el ADM desactivó (o se bloqueó) la cuenta con la sesión abierta: hay que cerrarla
+    val sessionEndedMessage: String? = null,
+    // No se pudo volver a cargar el perfil (tras un cierre de la app): se ofrece "Reintentar"
+    val profileError: String? = null
 )
 
 class LoginViewModel : ViewModel() {
@@ -35,6 +39,9 @@ class LoginViewModel : ViewModel() {
     val uiState: StateFlow<LoginUiState> = _uiState.asStateFlow()
 
     private var restoreJob: Job? = null
+    private var profileJob: Job? = null
+    // true tras "Cerrar sesión": las pantallas que aún se ven un instante no deben recargar el perfil
+    private var sessionClosed = false
 
     // ---------- Iniciar sesión ----------
     fun onEmailChange(value: String) {
@@ -62,6 +69,7 @@ class LoginViewModel : ViewModel() {
                     val profile = FirebaseAuthManager.loadCurrentProfile()
                     if (profile.isSuccess) {
                         _uiState.update { it.copy(isLoading = false, password = "", profile = profile.getOrNull()) }
+                        watchProfile()
                         onActive()
                     } else {
                         FirebaseAuthManager.signOut()
@@ -132,6 +140,7 @@ class LoginViewModel : ViewModel() {
                     onLoggedOut()
                 } else {
                     _uiState.update { it.copy(profile = profile) }
+                    watchProfile()
                     if (!alreadyInHome) onLoggedIn()
                 }
                 break
@@ -143,11 +152,79 @@ class LoginViewModel : ViewModel() {
         viewModelScope.launch {
             val result = FirebaseAuthManager.loadCurrentProfile()
             _uiState.update { it.copy(profile = result.getOrNull(), errorMessage = result.exceptionOrNull()?.message) }
+            if (result.isSuccess) watchProfile()
         }
     }
 
+    // Si Android cerró la app (process death), al volver se abre directo la última pantalla sin pasar
+    // por "start": el perfil de la sesión está vacío y se vuelve a cargar.
+    // - Sin internet: se reintenta cada 5 segundos hasta que vuelva la conexión.
+    // - Sin sesión o sin perfil: se cierra la sesión ("No encontramos tu cuenta…").
+    // - Otro error: se muestra con el botón "Reintentar" (profileError), en vez de quedarse cargando.
+    fun ensureProfile() {
+        if (_uiState.value.profile != null || restoreJob?.isActive == true) return
+        if (sessionClosed) return   // se acaba de cerrar la sesión a propósito
+        if (!FirebaseAuthManager.hasVerifiedSession()) {
+            endSession(FirebaseAuthManager.ACCOUNT_NOT_FOUND_MESSAGE)
+            return
+        }
+        _uiState.update { it.copy(profileError = null) }
+        restoreJob = viewModelScope.launch {
+            while (true) {
+                val result = FirebaseAuthManager.loadCurrentProfile()
+                val profile = result.getOrNull()
+                val error = result.exceptionOrNull()?.message
+                when {
+                    profile != null -> {
+                        _uiState.update { it.copy(profile = profile) }
+                        watchProfile()   // si la cuenta está desactivada, watchProfile cierra la sesión
+                    }
+                    error == FirebaseAuthManager.NO_CONNECTION_MESSAGE -> {
+                        delay(5000)
+                        continue
+                    }
+                    error == FirebaseAuthManager.PROFILE_NOT_FOUND_MESSAGE ->
+                        endSession(FirebaseAuthManager.ACCOUNT_NOT_FOUND_MESSAGE)
+                    else -> _uiState.update { it.copy(profileError = error ?: "No pudimos cargar tu cuenta.") }
+                }
+                break
+            }
+        }
+    }
+
+    // US-002: mientras hay sesión se escucha el perfil propio. Si el ADM desactiva la cuenta, se pide
+    // cerrar la sesión (lo hace AppNavGraph); si cambia algo (por ejemplo, el equipo del DT), se
+    // actualiza el perfil de la sesión y el inicio y el plantel se actualizan solos.
+    private fun watchProfile() {
+        sessionClosed = false
+        profileJob?.cancel()
+        profileJob = viewModelScope.launch {
+            FirebaseAuthManager.currentProfileFlow().collect { profile ->
+                when {
+                    profile == null -> endSession(FirebaseAuthManager.ACCOUNT_NOT_FOUND_MESSAGE)
+                    profile.status == AccountStatus.INACTIVE -> endSession("Tu cuenta fue desactivada por la administración.")
+                    profile.status == AccountStatus.BLOCKED ->
+                        endSession("Tu cuenta está bloqueada. Comunícate con el administrador de tu academia.")
+                    profile != _uiState.value.profile -> _uiState.update { it.copy(profile = profile) }
+                }
+            }
+        }
+    }
+
+    // Pide a AppNavGraph cerrar la sesión y explicar el motivo en "Iniciar sesión"
+    private fun endSession(message: String) {
+        _uiState.update { it.copy(sessionEndedMessage = message) }
+    }
+
+    // Tras cerrar una sesión que terminó la administración: se explica el motivo en "Iniciar sesión"
+    fun showMessage(message: String) {
+        _uiState.update { it.copy(errorMessage = message) }
+    }
+
     fun signOut() {
+        sessionClosed = true
         restoreJob?.cancel()
+        profileJob?.cancel()
         FirebaseAuthManager.signOut()
         _uiState.value = LoginUiState()
     }

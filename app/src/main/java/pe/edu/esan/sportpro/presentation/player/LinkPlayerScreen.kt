@@ -11,6 +11,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
+import pe.edu.esan.sportpro.presentation.components.Messages
 import pe.edu.esan.sportpro.presentation.components.Illustration
 import pe.edu.esan.sportpro.presentation.components.PrimaryButton
 import pe.edu.esan.sportpro.presentation.components.SportProCard
@@ -45,7 +46,7 @@ fun LinkPlayerScreen(viewModel: PlayerViewModel, onBack: () -> Unit, onLinked: (
             )
         }
 
-        PlayerMessages(state)
+        Messages(state.errorMessage, state.infoMessage)
         Spacer(Modifier.height(20.dp))
         PrimaryButton("Vincular", onClick = { viewModel.linkPlayer(onLinked) }, loading = state.isLoading)
     }

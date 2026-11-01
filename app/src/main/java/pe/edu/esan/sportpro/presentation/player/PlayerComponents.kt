@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -23,8 +22,6 @@ import androidx.compose.ui.unit.sp
 import pe.edu.esan.sportpro.data.model.Player
 import pe.edu.esan.sportpro.data.model.PlayerStatus
 import pe.edu.esan.sportpro.data.model.toLocalDateText
-import pe.edu.esan.sportpro.presentation.components.ErrorBox
-import pe.edu.esan.sportpro.presentation.components.InfoBox
 import pe.edu.esan.sportpro.presentation.components.PlayerAvatar
 import pe.edu.esan.sportpro.presentation.components.StatusChip
 import pe.edu.esan.sportpro.ui.theme.BordeSuave
@@ -104,18 +101,5 @@ fun GuardianAuthorizationLine(player: Player) {
         )
     } else {
         Text("Falta la autorización del apoderado", color = ErrorTexto, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-    }
-}
-
-// Mensajes de éxito o error de la última acción
-@Composable
-fun PlayerMessages(state: PlayerUiState) {
-    state.errorMessage?.let {
-        Spacer(Modifier.height(12.dp))
-        ErrorBox(it)
-    }
-    state.infoMessage?.let {
-        Spacer(Modifier.height(12.dp))
-        InfoBox { Text(it, color = TextoPrincipal, fontWeight = FontWeight.Bold, fontSize = 14.sp) }
     }
 }

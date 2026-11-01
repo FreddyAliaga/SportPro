@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.sp
 import pe.edu.esan.sportpro.data.model.AccountStatus
 import pe.edu.esan.sportpro.data.model.Team
 import pe.edu.esan.sportpro.data.model.UserProfile
+import pe.edu.esan.sportpro.presentation.components.SportProDialog
 import pe.edu.esan.sportpro.presentation.components.TextLink
 import pe.edu.esan.sportpro.ui.theme.Borde
 import pe.edu.esan.sportpro.ui.theme.ErrorTexto
@@ -38,27 +39,6 @@ import pe.edu.esan.sportpro.ui.theme.Tarjeta
 import pe.edu.esan.sportpro.ui.theme.TextoPrincipal
 import pe.edu.esan.sportpro.ui.theme.TextoSecundario
 import pe.edu.esan.sportpro.ui.theme.Turquesa
-
-// Diálogo base con el estilo de SportPro (tarjeta blanca muy redondeada)
-@Composable
-private fun SportProDialog(
-    title: String,
-    confirmText: String,
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit,
-    confirmColor: androidx.compose.ui.graphics.Color = Turquesa,
-    content: @Composable () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = Tarjeta,
-        shape = RoundedCornerShape(28.dp),
-        title = { Text(title, color = TextoPrincipal, fontWeight = FontWeight.Black, fontSize = 20.sp) },
-        text = content,
-        confirmButton = { TextLink(confirmText, color = confirmColor, onClick = onConfirm) },
-        dismissButton = { TextLink("Cancelar", color = TextoSecundario, onClick = onDismiss) }
-    )
-}
 
 // Elegir el DT de un equipo ("" = Sin DT). Un DT dirige un solo equipo.
 @Composable
@@ -153,26 +133,12 @@ fun ToggleUserDialog(user: UserProfile, onDismiss: () -> Unit, onConfirm: () -> 
     }
 }
 
-// Confirmación simple (anular un código, desactivar un equipo)
-@Composable
-fun ConfirmDialog(
-    title: String,
-    text: String,
-    confirmText: String,
-    onDismiss: () -> Unit,
-    onConfirm: () -> Unit
-) {
-    SportProDialog(title = title, confirmText = confirmText, confirmColor = ErrorTexto, onConfirm = onConfirm, onDismiss = onDismiss) {
-        Text(text, color = TextoPrincipal, style = MaterialTheme.typography.bodyLarge)
-    }
-}
-
 // Elegir el equipo para una nueva invitación de DT.
-// Si el equipo ya tiene DT se avisa: si el invitado se registra, habrá que elegir quién queda.
+// Un solo DT por equipo: un equipo que ya tiene DT o un código de DT pendiente no se puede elegir.
 @Composable
 fun TeamPickerDialog(
     teams: List<Team>,
-    coachesOf: (String) -> List<UserProfile>,
+    blockedReason: (Team) -> String?,    // null = se puede invitar
     onDismiss: () -> Unit,
     onPick: (Team) -> Unit
 ) {
@@ -187,22 +153,21 @@ fun TeamPickerDialog(
                     Text("Primero crea un equipo en Academia y equipos.", color = TextoSecundario)
                 }
                 teams.forEach { team ->
-                    val coaches = coachesOf(team.id)
+                    val reason = blockedReason(team)
                     Column(
                         Modifier
                             .fillMaxWidth()
                             .heightIn(min = 48.dp)
-                            .clickable { onPick(team) }
+                            .clickable(enabled = reason == null, role = Role.Button) { onPick(team) }
                             .padding(vertical = 6.dp)
                     ) {
-                        Text("${team.name} · ${team.category}", color = TextoPrincipal, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                        if (coaches.isNotEmpty()) {
-                            Text(
-                                "Ya tiene DT (${coaches.joinToString(" y ") { it.name }}). Si el invitado se registra, elige quién queda con Cambiar DT.",
-                                color = ErrorTexto,
-                                fontSize = 13.sp
-                            )
-                        }
+                        Text(
+                            "${team.name} · ${team.category}",
+                            color = if (reason == null) TextoPrincipal else TextoSecundario,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp
+                        )
+                        reason?.let { Text(it, color = TextoSecundario, fontSize = 13.sp) }
                     }
                 }
             }

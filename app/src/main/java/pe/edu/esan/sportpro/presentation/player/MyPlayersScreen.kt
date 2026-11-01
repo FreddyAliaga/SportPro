@@ -14,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import pe.edu.esan.sportpro.data.model.Player
 import pe.edu.esan.sportpro.data.model.PlayerStatus
+import pe.edu.esan.sportpro.presentation.components.Messages
 import pe.edu.esan.sportpro.presentation.components.ErrorBox
 import pe.edu.esan.sportpro.presentation.components.SecondaryButton
 import pe.edu.esan.sportpro.presentation.components.SportProScreen
@@ -43,7 +44,7 @@ fun MyPlayersScreen(
             Spacer(Modifier.height(12.dp))
             ErrorBox(it)
         }
-        PlayerMessages(state)
+        Messages(state.errorMessage, state.infoMessage)
         Spacer(Modifier.height(20.dp))
 
         if (!state.myPlayersLoaded) {

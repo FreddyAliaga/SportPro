@@ -16,7 +16,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -30,6 +29,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -37,9 +37,10 @@ import pe.edu.esan.sportpro.data.model.Academy
 import pe.edu.esan.sportpro.data.model.Team
 import pe.edu.esan.sportpro.data.model.UserProfile
 import pe.edu.esan.sportpro.data.model.shortCategory
+import pe.edu.esan.sportpro.presentation.components.Messages
 import pe.edu.esan.sportpro.presentation.components.AcademyLogo
 import pe.edu.esan.sportpro.presentation.components.ErrorBox
-import pe.edu.esan.sportpro.presentation.components.InfoBox
+import pe.edu.esan.sportpro.presentation.components.LoadingBox
 import pe.edu.esan.sportpro.presentation.components.PrimaryButton
 import pe.edu.esan.sportpro.presentation.components.SecondaryButton
 import pe.edu.esan.sportpro.presentation.components.SectionLabel
@@ -50,13 +51,13 @@ import pe.edu.esan.sportpro.presentation.components.Subtitle
 import pe.edu.esan.sportpro.presentation.components.TextLink
 import pe.edu.esan.sportpro.presentation.components.Title
 import pe.edu.esan.sportpro.presentation.components.TopBarWithSteps
-import pe.edu.esan.sportpro.ui.theme.CoralSuave
 import pe.edu.esan.sportpro.ui.theme.ErrorTexto
 import pe.edu.esan.sportpro.ui.theme.SuperficieSuave
 import pe.edu.esan.sportpro.ui.theme.Tarjeta
 import pe.edu.esan.sportpro.ui.theme.TextoPrincipal
 import pe.edu.esan.sportpro.ui.theme.TextoSecundario
 import pe.edu.esan.sportpro.ui.theme.Turquesa
+import pe.edu.esan.sportpro.ui.theme.TurquesaOscuro
 
 // US-002 · Academia y equipos (ADM): datos de la academia y equipos agrupados por categoría (RN-004)
 @Composable
@@ -96,24 +97,25 @@ fun AcademyTeamsScreen(
         if (academy == null) {
             // Aún no llegan los datos (o hubo un error al leerlos)
             val loadError = state.loadError
-            if (loadError != null) {
-                ErrorBox(loadError)
-            } else {
-                Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = Turquesa)
-                }
-            }
+            if (loadError != null) ErrorBox(loadError) else LoadingBox()
             return@SportProScreen
         }
 
         AcademyCard(academy, onEditAcademy)
-        Messages(state)
+        // Errores al leer equipos, usuarios o códigos (la academia sí cargó)
+        state.loadError?.let {
+            Spacer(Modifier.height(12.dp))
+            ErrorBox(it)
+        }
+        Messages(state.errorMessage, state.infoMessage)
 
         Spacer(Modifier.height(20.dp))
         PrimaryButton("+ Nuevo equipo", onNewTeam)
         Spacer(Modifier.height(20.dp))
 
-        if (state.activeTeamsByCategory.isEmpty()) {
+        if (!state.teamsLoaded) {
+            if (state.loadErrors["equipos"] == null) LoadingBox()
+        } else if (state.activeTeamsByCategory.isEmpty()) {
             Subtitle("Aún no tienes equipos. Crea el primero y luego invita a su DT con un código.")
         }
         state.activeTeamsByCategory.forEach { (category, teams) ->
@@ -123,6 +125,7 @@ fun AcademyTeamsScreen(
                 TeamCard(
                     team = team,
                     coaches = state.coachesOf(team.id),
+                    coachesLoading = !state.membersLoaded,
                     onClick = { onEditTeam(team) },
                     onChangeCoach = { teamForCoach = team },
                     onOpenRoster = { onOpenRoster(team) }
@@ -139,6 +142,7 @@ fun AcademyTeamsScreen(
                 TeamCard(
                     team = team,
                     coaches = emptyList(),
+                    coachesLoading = false,
                     onClick = { onEditTeam(team) },
                     onChangeCoach = null,
                     onOpenRoster = { onOpenRoster(team) }   // para trasladar a sus jugadores
@@ -149,19 +153,6 @@ fun AcademyTeamsScreen(
 
         Spacer(Modifier.height(8.dp))
         SecondaryButton("Usuarios e invitaciones", onUsersInvitations)
-    }
-}
-
-// Mensajes de éxito o error de la última acción
-@Composable
-fun Messages(state: AcademyUiState) {
-    state.errorMessage?.let {
-        Spacer(Modifier.height(12.dp))
-        ErrorBox(it)
-    }
-    state.infoMessage?.let {
-        Spacer(Modifier.height(12.dp))
-        InfoBox { Text(it, color = TextoPrincipal, fontWeight = FontWeight.Bold, fontSize = 14.sp) }
     }
 }
 
@@ -195,6 +186,7 @@ private fun AcademyCard(academy: Academy, onEdit: () -> Unit) {
 private fun TeamCard(
     team: Team,
     coaches: List<UserProfile>,
+    coachesLoading: Boolean,         // aún no llega la lista de usuarios: no se sabe si tiene DT
     onClick: () -> Unit,
     onChangeCoach: (() -> Unit)?,    // null en equipos desactivados
     onOpenRoster: () -> Unit         // US-003: "Ver plantel"
@@ -205,7 +197,7 @@ private fun TeamCard(
             .alpha(if (team.active) 1f else 0.6f)
             .clip(RoundedCornerShape(22.dp))
             .background(Tarjeta)
-            .clickable(onClick = onClick)
+            .clickable(onClickLabel = "Editar equipo", role = Role.Button, onClick = onClick)
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
@@ -222,6 +214,7 @@ private fun TeamCard(
                 Text(
                     when {
                         !team.active -> "Equipo desactivado · su historial se conserva"
+                        coachesLoading -> "Cargando DT…"
                         coaches.isEmpty() -> "Titulares ${team.maxStarters} · suplentes ${team.maxSubstitutes}"
                         else -> "DT ${coaches.joinToString(" y ") { it.name }}"
                     },
@@ -229,7 +222,8 @@ private fun TeamCard(
                     fontSize = 14.sp
                 )
             }
-            if (team.active && coaches.isEmpty()) StatusChip("Sin DT", CoralSuave, ErrorTexto)
+            // Opción G: el coral es solo decorativo; "Sin DT" va en turquesa suave
+            if (team.active && !coachesLoading && coaches.isEmpty()) StatusChip("Sin DT", SuperficieSuave, TurquesaOscuro)
         }
         // Dos DT con el mismo equipo (por ejemplo, se invitó a otro DT): hay que elegir uno
         if (coaches.size > 1) {
@@ -242,7 +236,7 @@ private fun TeamCard(
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             TextLink("Ver plantel", onClick = onOpenRoster)
-            if (onChangeCoach != null) TextLink("Cambiar DT", onClick = onChangeCoach)
+            if (onChangeCoach != null && !coachesLoading) TextLink("Cambiar DT", onClick = onChangeCoach)
         }
     }
 }

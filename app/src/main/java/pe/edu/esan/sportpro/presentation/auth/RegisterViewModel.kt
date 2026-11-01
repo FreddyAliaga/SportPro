@@ -153,6 +153,8 @@ class RegisterViewModel : ViewModel() {
 
     // ---------- Paso 3: crear la cuenta ----------
     fun createAccount(onSuccess: () -> Unit) {
+        // Evita el doble toque: un segundo registro podría dejar una academia o un perfil huérfano
+        if (_uiState.value.isLoading) return
         val state = _uiState.value
         val invitation = state.invitation
         if (invitation == null && !state.registeringAcademy) return

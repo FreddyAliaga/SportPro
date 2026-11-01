@@ -37,6 +37,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -84,7 +85,7 @@ fun LogoPicker(
                 .clip(RoundedCornerShape(30.dp))
                 .background(SuperficieSuave)
                 .border(2.dp, Borde, RoundedCornerShape(30.dp))
-                .clickable(enabled = !loading, onClick = openPicker),
+                .clickable(enabled = !loading, role = Role.Button, onClick = openPicker),
             contentAlignment = Alignment.Center
         ) {
             val image = rememberBase64Image(logoBase64)
@@ -110,7 +111,7 @@ fun LogoPicker(
                 textAlign = TextAlign.Center,
                 modifier = Modifier
                     .heightIn(min = 44.dp)   // área táctil mínima
-                    .clickable(onClick = onRemove)
+                    .clickable(role = Role.Button, onClick = onRemove)
                     .wrapContentHeight(Alignment.CenterVertically)
             )
         }

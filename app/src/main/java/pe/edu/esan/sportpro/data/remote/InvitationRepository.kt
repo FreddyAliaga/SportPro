@@ -4,6 +4,7 @@ import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.tasks.await
 import pe.edu.esan.sportpro.data.model.Invitation
+import pe.edu.esan.sportpro.data.model.InvitationStatus
 import java.util.Date
 
 // Lectura de códigos de invitación (colección "invitations", el ID del documento es el código)
@@ -37,7 +38,7 @@ object InvitationRepository {
     fun isUsable(snapshot: DocumentSnapshot): Boolean {
         if (!snapshot.exists()) return false
         if (snapshot.getBoolean("used") == true) return false
-        if (snapshot.getString("status") == "ANULADO") return false   // el ADM o el DT lo anuló (US-002)
+        if (snapshot.getString("status") == InvitationStatus.REVOKED) return false   // el ADM o el DT lo anuló (US-002)
         val expiresAt = snapshot.getTimestamp("expiresAt")?.toDate()
         if (expiresAt != null && expiresAt.before(Date())) return false
         return true

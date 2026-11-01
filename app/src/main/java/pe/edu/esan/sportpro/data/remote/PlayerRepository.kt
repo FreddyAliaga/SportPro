@@ -118,6 +118,7 @@ object PlayerRepository {
     // Si es menor, guarda también la autorización del apoderado que declara quien lo registra
     // (un mayor no lleva esos campos). Usar solo con el formulario ya validado.
     suspend fun createPlayer(academyId: String, team: Team, form: PlayerSportForm, by: UserProfile): Result<String> {
+        if (!ConnectionChecker.isOnline()) return ConnectionChecker.noConnection()
         return try {
             val ref = playersRef.document()   // ID automático
             val authorization =
@@ -159,6 +160,7 @@ object PlayerRepository {
     // authorizedBy: quien declara la autorización del apoderado cuando el jugador queda como menor
     // y aún no la tiene (null = no cambia).
     suspend fun updateSportData(playerId: String, form: PlayerSportForm, authorizedBy: UserProfile? = null): Result<Unit> {
+        if (!ConnectionChecker.isOnline()) return ConnectionChecker.noConnection()
         return try {
             val authorization = authorizedBy?.let { guardianAuthorizationData(it) } ?: emptyMap()
             firestore.runTransaction { transaction ->
@@ -199,6 +201,7 @@ object PlayerRepository {
     // En la misma operación se actualiza hasEmergencyContact del jugador (RN-005: estado del plantel).
     // Usar solo con el formulario ya validado.
     suspend fun savePrivateData(playerId: String, form: PlayerPrivateForm): Result<Unit> {
+        if (!ConnectionChecker.isOnline()) return ConnectionChecker.noConnection()
         return try {
             val data = hashMapOf<String, Any?>(
                 "contactPhone" to form.contactPhone.trim(),
@@ -227,6 +230,7 @@ object PlayerRepository {
     // En la misma operación: queda en el historial y se anulan sus códigos pendientes
     // (mostrarían el equipo anterior).
     suspend fun transferPlayer(player: Player, fromTeam: Team, toTeam: Team, by: UserProfile): Result<Unit> {
+        if (!ConnectionChecker.isOnline()) return ConnectionChecker.noConnection()
         return try {
             val pendingCodes = pendingCodes(player)   // sin internet falla aquí, antes de escribir nada
             firestore.runTransaction { transaction ->
@@ -243,6 +247,7 @@ object PlayerRepository {
     // "Retirar" (Inactivo) o "Reactivar". Nunca se borra: se conserva su historial (RN-004).
     // Al retirarlo se anulan sus códigos pendientes en la misma operación.
     suspend fun setPlayerActive(player: Player, team: Team, active: Boolean, by: UserProfile): Result<Unit> {
+        if (!ConnectionChecker.isOnline()) return ConnectionChecker.noConnection()
         return try {
             val pendingCodes = if (!active) pendingCodes(player) else emptyList()
             firestore.runTransaction { transaction ->
@@ -287,6 +292,7 @@ object PlayerRepository {
     // PRIVACIDAD: el código lo puede leer cualquiera que lo tenga, por eso lleva el nombre corto ("Mateo R.").
     // Devuelve el código.
     suspend fun createPlayerInvitation(player: Player, role: String, by: UserProfile): Result<String> {
+        if (!ConnectionChecker.isOnline()) return ConnectionChecker.noConnection()
         return try {
             val expiresAt = Timestamp(Date(System.currentTimeMillis() + INVITATION_VALID_DAYS * 24L * 60 * 60 * 1000))
             val academyRef = firestore.collection("academies").document(player.academyId)
@@ -363,6 +369,7 @@ object PlayerRepository {
     // "Vincular otro jugador": un apoderado que YA tiene cuenta usa un nuevo código PAD.
     // En una transacción marca el código como usado y lo agrega como apoderado del jugador.
     suspend fun linkAnotherPlayer(invitation: Invitation, profile: UserProfile): Result<Unit> {
+        if (!ConnectionChecker.isOnline()) return ConnectionChecker.noConnection()
         return try {
             if (invitation.role != "PAD" || invitation.playerId.isEmpty()) {
                 throw IllegalStateException("Este código no es de apoderado. Pide al DT un código para apoderado.")

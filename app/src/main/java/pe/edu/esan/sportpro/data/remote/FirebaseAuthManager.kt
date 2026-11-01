@@ -45,6 +45,7 @@ object FirebaseAuthManager {
     // El código se marca como usado en la MISMA operación (transacción) que crea el perfil,
     // así nadie puede reutilizarlo (RN-002).
     suspend fun registerWithInvitation(form: RegisterForm, invitation: Invitation): Result<Unit> {
+        if (!ConnectionChecker.isOnline()) return ConnectionChecker.noConnection()
         var account: AuthAccount? = null
         return try {
             val birthDate = toTimestamp(form.birthDate)
@@ -169,11 +170,13 @@ object FirebaseAuthManager {
     // La academia y el perfil ADM se crean en la MISMA operación (transacción): no puede quedar
     // una academia sin administrador ni un ADM sin academia.
     suspend fun registerAcademyAdmin(form: RegisterForm, academy: Academy): Result<Unit> {
+        if (!ConnectionChecker.isOnline()) return ConnectionChecker.noConnection()
         var account: AuthAccount? = null
         return try {
             val birthDate = toTimestamp(form.birthDate)
 
-            // COMPROBACIÓN DE CONEXIÓN antes de crear el usuario de Auth.
+            // COMPROBACIÓN DE CONEXIÓN antes de crear el usuario de Auth (segunda barrera: ConnectionChecker
+            // ya descartó el modo avión, pero el teléfono puede tener red y aun así no llegar al servidor).
             // ¿Por qué? Si se crea el usuario de Auth y luego la transacción falla por falta de internet,
             // tampoco se podría borrar ese usuario (borrar también necesita internet) y quedaría una
             // cuenta huérfana: correo "ocupado" pero sin perfil ni academia.
@@ -238,6 +241,7 @@ object FirebaseAuthManager {
     }
 
     suspend fun resendVerificationEmail(): Result<Unit> {
+        if (!ConnectionChecker.isOnline()) return ConnectionChecker.noConnection()
         return try {
             val user = auth.currentUser ?: throw Exception("No hay una sesión activa.")
             user.sendEmailVerification().await()
@@ -249,6 +253,7 @@ object FirebaseAuthManager {
 
     // Vuelve a consultar a Firebase si el correo ya fue verificado
     suspend fun reloadAndCheckVerified(): Result<Boolean> {
+        if (!ConnectionChecker.isOnline()) return ConnectionChecker.noConnection()
         return try {
             val user = auth.currentUser ?: throw Exception("No hay una sesión activa.")
             user.reload().await()
@@ -263,6 +268,7 @@ object FirebaseAuthManager {
 
     // Tras verificar el correo, la cuenta pasa de "pendiente de verificación" a "activa".
     suspend fun completeVerification(): Result<String> {
+        if (!ConnectionChecker.isOnline()) return ConnectionChecker.noConnection()
         return try {
             val uid = auth.currentUser?.uid ?: throw Exception("No hay una sesión activa.")
             val userRef = firestore.collection("users").document(uid)
@@ -284,6 +290,7 @@ object FirebaseAuthManager {
     // - Si el correo no está verificado, la sesión queda abierta para poder reenviar el enlace.
     // - Si la cuenta está bloqueada o desactivada, se cierra la sesión y se informa el motivo.
     suspend fun signIn(email: String, password: String): Result<SignInOutcome> {
+        if (!ConnectionChecker.isOnline()) return ConnectionChecker.noConnection()
         return try {
             auth.signInWithEmailAndPassword(email.trim(), password).await()
             val user = auth.currentUser ?: throw Exception("No se pudo iniciar sesión.")
@@ -323,6 +330,7 @@ object FirebaseAuthManager {
 
     // "Recuperar contraseña": Firebase envía un enlace al correo
     suspend fun sendPasswordReset(email: String): Result<Unit> {
+        if (!ConnectionChecker.isOnline()) return ConnectionChecker.noConnection()
         return try {
             auth.sendPasswordResetEmail(email.trim()).await()
             Result.success(Unit)

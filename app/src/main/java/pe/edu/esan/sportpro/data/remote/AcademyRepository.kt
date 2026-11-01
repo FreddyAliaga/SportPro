@@ -90,6 +90,7 @@ object AcademyRepository {
     // Si cambió el nombre o la ciudad, también se actualizan en sus códigos sin usar
     // (es lo que ve quien se registra con el código). previous: la academia antes del cambio.
     suspend fun updateAcademy(academy: Academy, previous: Academy): Result<Unit> {
+        if (!ConnectionChecker.isOnline()) return ConnectionChecker.noConnection()
         return try {
             val newName = academy.name.trim()
             val newCity = academy.city.trim()
@@ -154,6 +155,7 @@ object AcademyRepository {
         coachChanged: Boolean,
         coachUid: String
     ): Result<String> {
+        if (!ConnectionChecker.isOnline()) return ConnectionChecker.noConnection()
         return try {
             val isNew = team.id.isEmpty()
             val ref = if (isNew) teamsRef(academyId).document() else teamsRef(academyId).document(team.id)
@@ -196,6 +198,7 @@ object AcademyRepository {
 
     // Cambia el DT de un equipo (coachUid "" = Sin DT)
     suspend fun changeCoach(academyId: String, teamId: String, coachUid: String): Result<Unit> {
+        if (!ConnectionChecker.isOnline()) return ConnectionChecker.noConnection()
         return try {
             val currentCoachUids = teamCoachUids(academyId, teamId)
             val openDtCodes = if (assignsNewCoach(coachUid, currentCoachUids)) {
@@ -299,6 +302,7 @@ object AcademyRepository {
     // los de jugador y apoderado) y su DT queda sin equipo. Sus jugadores se quedan en el equipo
     // (el ADM los puede trasladar desde "Ver plantel").
     suspend fun setTeamActive(academyId: String, teamId: String, active: Boolean): Result<Unit> {
+        if (!ConnectionChecker.isOnline()) return ConnectionChecker.noConnection()
         return try {
             val pendingCodes = if (!active) pendingTeamCodes(academyId, teamId) else emptyList()
             // DT del equipo según el servidor (también el que aún no verifica su correo)
@@ -346,6 +350,7 @@ object AcademyRepository {
     // Al desactivar a un DT, en la misma operación queda sin equipo (teamId ""): así, al
     // reactivarlo, no aparecen 2 DT en el mismo equipo. El ADM le asigna equipo con "Cambiar DT".
     suspend fun setUserActive(user: UserProfile, active: Boolean): Result<Unit> {
+        if (!ConnectionChecker.isOnline()) return ConnectionChecker.noConnection()
         return try {
             firestore.runTransaction { transaction ->
                 val ref = userRef(user.uid)
@@ -365,6 +370,7 @@ object AcademyRepository {
     // Crea un código PREFIJO-XXXXXX (ej. HALC-7K2P9Q) para invitar a un DT a un equipo.
     // Mismo formato que lee la US-001 (InvitationRepository). Devuelve el código.
     suspend fun createDtInvitation(academy: Academy, team: Team, admin: UserProfile): Result<String> {
+        if (!ConnectionChecker.isOnline()) return ConnectionChecker.noConnection()
         return try {
             // Segunda barrera (la lista del teléfono puede estar desactualizada): un solo DT por equipo.
             // Si el equipo ya tiene DT (aunque aún no verifique su correo) o un código de DT
@@ -422,6 +428,7 @@ object AcademyRepository {
 
     // Anular = status "ANULADO" (RN-002). El código no se borra; un código usado no se puede anular.
     suspend fun revokeInvitation(code: String): Result<Unit> {
+        if (!ConnectionChecker.isOnline()) return ConnectionChecker.noConnection()
         return try {
             firestore.runTransaction { transaction ->
                 val ref = invitationsRef.document(code)

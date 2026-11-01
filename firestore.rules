@@ -2,8 +2,12 @@ rules_version = '2';
 
 // Reglas de seguridad de Cloud Firestore – SportPro
 // US-001 (registro con código de invitación e inicio de sesión)
-// US-002 (academia, equipos, usuarios e invitaciones de DT por el ADM).
-// US-003 (plantel y perfil del jugador, códigos JUG/PAD). Se amplían en US-016.
+// US-002 (academia, equipos, usuarios e invitaciones de DT por el ADM)
+// US-003 (plantel y perfil del jugador, códigos JUG/PAD)
+// US-006 (partidos, convocatoria, respuestas y alineación)
+// US-007 (catálogo configurable de tipos de evento)
+// Notificaciones: bandeja dentro de la app (base de la US-012).
+// Se amplían en US-016.
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -446,6 +450,55 @@ service cloud.firestore {
 
         allow delete: if false;
       }
+
+      // US-007: catálogo de eventos de la academia. Lo leen sus miembros activos (el DT lo ve en
+      // solo lectura); solo el ADM lo crea y edita. Nada se borra: desactivar = active false.
+      match /eventTypes/{typeId} {
+        allow read: if isMemberOf(academyId);
+
+        allow create: if isAdmOf(academyId)
+          && request.resource.data.keys().hasOnly(['name', 'icon', 'color', 'affectsScore', 'requiresPlayer', 'requiresTeam', 'allowsNote', 'active', 'system', 'order', 'createdAt', 'updatedAt'])
+          && validEventType(typeId, request.resource.data)
+          // Los de fábrica tienen su clave como ID; los nuevos del ADM empiezan activos y no son de fábrica
+          && request.resource.data.system == (typeId in defaultEventTypeIds())
+          && (request.resource.data.system == true || request.resource.data.active == true)
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.updatedAt == request.time;
+
+        // Editar, desactivar o reactivar (system y createdAt no cambian)
+        allow update: if isAdmOf(academyId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'icon', 'color', 'affectsScore', 'requiresPlayer', 'requiresTeam', 'allowsNote', 'active', 'order', 'updatedAt'])
+          && validEventType(typeId, request.resource.data)
+          && request.resource.data.updatedAt == request.time;
+
+        allow delete: if false;
+      }
+    }
+
+    // ---------- US-007 ----------
+
+    // Claves de los tipos de evento de fábrica
+    function defaultEventTypeIds() {
+      return ['inicio', 'fin', 'gol', 'tarjeta_amarilla', 'tarjeta_roja', 'cambio', 'falta', 'penal',
+              'fuera_de_juego', 'tiro_de_esquina', 'saque_lateral', 'saque_de_meta'];
+    }
+
+    // Tipo de evento válido: ícono y color de las listas fijas de la app.
+    // Afectar el marcador o pedir jugador exige saber de qué equipo es.
+    // 'Inicio' y 'Fin' siempre están activos y no afectan el marcador ni piden jugador ni equipo.
+    function validEventType(typeId, data) {
+      return data.name is string && data.name.size() >= 2 && data.name.size() <= 30
+        && data.icon in ['balon', 'inicio', 'fin', 'tarjeta', 'cambio', 'silbato', 'penal', 'prohibido',
+                         'banderin', 'mano', 'escudo', 'reloj', 'advertencia', 'estrella']
+        && data.color in ['#0E6B6F', '#2E7D32', '#1565C0', '#F2B705', '#C2410C', '#6A4C93', '#5F6B6D', '#E8710A']
+        && data.affectsScore is bool && data.requiresPlayer is bool
+        && data.requiresTeam is bool && data.allowsNote is bool
+        && data.active is bool && data.system is bool
+        && data.order is int && data.order >= 0 && data.order <= 999
+        && (!(data.affectsScore || data.requiresPlayer) || data.requiresTeam)
+        && (!(typeId in ['inicio', 'fin'])
+            || (data.active == true && data.affectsScore == false
+                && data.requiresPlayer == false && data.requiresTeam == false));
     }
 
     // US-003: jugadores (datos deportivos). Nunca se borran: retirar = active false (RN-004).
@@ -583,6 +636,290 @@ service cloud.firestore {
 
         allow update, delete: if false;
       }
+    }
+
+    // ---------- US-006 ----------
+
+    function matchPath(matchId) {
+      return /databases/$(database)/documents/matches/$(matchId);
+    }
+
+    function callupPath(matchId, playerId) {
+      return /databases/$(database)/documents/matches/$(matchId)/callups/$(playerId);
+    }
+
+    // Posiciones de la alineación (las mismas de PLAYER_POSITIONS en la app)
+    function positions() {
+      return ['Portero', 'Defensa central', 'Lateral', 'Mediocampista defensivo', 'Mediocampista',
+              'Mediocampista ofensivo', 'Extremo', 'Delantero'];
+    }
+
+    // El titular número i (si existe) tiene solo jugador, nombre corto y una posición de la lista.
+    // Las reglas no tienen bucles: se revisa cada índice posible (hasta 11 titulares, validTeam).
+    function validStarterAt(starters, i) {
+      return starters.size() <= i
+        || (starters[i] is map
+            && starters[i].keys().hasOnly(['playerId', 'playerName', 'position'])
+            && starters[i].playerId is string
+            && starters[i].playerName is string && starters[i].playerName.size() <= 30
+            && starters[i].position in positions());
+    }
+
+    function validStarters(starters) {
+      return validStarterAt(starters, 0) && validStarterAt(starters, 1) && validStarterAt(starters, 2)
+        && validStarterAt(starters, 3) && validStarterAt(starters, 4) && validStarterAt(starters, 5)
+        && validStarterAt(starters, 6) && validStarterAt(starters, 7) && validStarterAt(starters, 8)
+        && validStarterAt(starters, 9) && validStarterAt(starters, 10);
+    }
+
+    // Datos válidos de un partido (rival, lugar y fecha-hora)
+    function validMatch(data) {
+      return data.rival is string && data.rival.size() >= 2 && data.rival.size() <= 40
+        && data.place is string && data.place.size() >= 2 && data.place.size() <= 80
+        && data.startsAt is timestamp
+        && data.teamName is string && data.teamName.size() <= 40;
+    }
+
+    // El partido sigue abierto: programado o convocado y todavía no empieza
+    function matchOpen(matchData) {
+      return matchData.status in ['PROGRAMADO', 'CONVOCADO'] && request.time < matchData.startsAt;
+    }
+
+    // Quién responde la convocatoria (RN-003): si el jugador es menor, uno de sus apoderados;
+    // si es mayor, solo el propio jugador con su cuenta. Con la cuenta ACTIVA y de la misma academia.
+    function isResponder(player) {
+      return signedIn()
+        && ((player.isMinor == true && request.auth.uid in player.guardianIds)
+            || (player.isMinor == false && player.userId != '' && player.userId == request.auth.uid))
+        && exists(userPath(request.auth.uid))
+        && myProfile().status == 'active'
+        && myProfile().academyId == player.academyId;
+    }
+
+    // Se puede responder: partido convocado (no cancelado ni empezado) y dentro del plazo de la
+    // academia (hasta callupConfirmHours antes del inicio, RN-008).
+    // Lecturas: perfil, partido, academia y jugador (4 de las 10 permitidas).
+    function canRespond(matchId, playerId) {
+      let m = get(matchPath(matchId)).data;
+      let p = get(playerPath(playerId)).data;
+      return m.status == 'CONVOCADO'
+        && p.academyId == m.academyId
+        && request.time <= m.startsAt - duration.value(get(academyPath(m.academyId)).data.callupConfirmHours, 'h')
+        && isResponder(p);
+    }
+
+    // US-006: partidos (colección raíz). Nunca se borran: cancelar = status "CANCELADO".
+    // Los leen los miembros activos de la academia (datos generales del partido).
+    match /matches/{matchId} {
+      allow read: if isMemberOf(resource.data.academyId);
+
+      // "Nuevo partido": el DT de ESE equipo (activo), en el futuro, empieza "Programado"
+      allow create: if isDtOfTeam(request.resource.data.academyId, request.resource.data.teamId)
+        && request.resource.data.keys().hasOnly(['academyId', 'teamId', 'teamName', 'rival', 'startsAt', 'place', 'status', 'createdBy', 'createdAt', 'updatedAt'])
+        && validMatch(request.resource.data)
+        && request.resource.data.teamName == get(teamPath(request.resource.data.academyId, request.resource.data.teamId)).data.name
+        && request.resource.data.startsAt > request.time
+        && request.resource.data.status == 'PROGRAMADO'
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+
+      // Publicar la convocatoria: de "Programado" a "Convocado", antes del inicio
+      allow update: if isDtOfTeam(resource.data.academyId, resource.data.teamId)
+        && resource.data.status == 'PROGRAMADO'
+        && request.time < resource.data.startsAt
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'callupPublishedAt', 'updatedAt'])
+        && request.resource.data.status == 'CONVOCADO'
+        && request.resource.data.callupPublishedAt == request.time
+        && request.resource.data.updatedAt == request.time;
+
+      // Reprogramar (antes del inicio): solo fecha-hora y lugar, a un momento futuro.
+      // El estado y las respuestas de la convocatoria se mantienen.
+      allow update: if isDtOfTeam(resource.data.academyId, resource.data.teamId)
+        && matchOpen(resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['startsAt', 'place', 'updatedAt'])
+        && validMatch(request.resource.data)
+        && request.resource.data.startsAt > request.time
+        && request.resource.data.updatedAt == request.time;
+
+      // Cancelar (antes del inicio): status "CANCELADO". No se borra nada y no se puede deshacer.
+      allow update: if isDtOfTeam(resource.data.academyId, resource.data.teamId)
+        && matchOpen(resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+        && request.resource.data.status == 'CANCELADO'
+        && request.resource.data.updatedAt == request.time;
+
+      allow delete: if false;
+
+      // Alineación: matches/{matchId}/lineup/current (RN-009). La leen los miembros de la academia.
+      // Solo el DT del equipo la arma o cambia, con el partido abierto (antes del inicio),
+      // con 1 titular como mínimo y sin pasar los máximos del equipo.
+      // Cada titular lleva una posición de la lista. (Que sean convocados confirmados y que haya un
+      // portero lo valida la app: las reglas no pueden recorrer la lista buscando.)
+      match /lineup/{docId} {
+        allow read: if docId == 'current' && isMemberOf(get(matchPath(matchId)).data.academyId);
+
+        allow create, update: if docId == 'current'
+          && isDtOfTeam(get(matchPath(matchId)).data.academyId, get(matchPath(matchId)).data.teamId)
+          && matchOpen(get(matchPath(matchId)).data)
+          && request.resource.data.keys().hasOnly(['starters', 'substitutes', 'updatedBy', 'updatedAt'])
+          && request.resource.data.starters is list
+          && request.resource.data.substitutes is list
+          && request.resource.data.starters.size() >= 1
+          && request.resource.data.starters.size() <= 11
+          && validStarters(request.resource.data.starters)
+          && request.resource.data.starters.size()
+               <= get(teamPath(get(matchPath(matchId)).data.academyId, get(matchPath(matchId)).data.teamId)).data.maxStarters
+          && request.resource.data.substitutes.size()
+               <= get(teamPath(get(matchPath(matchId)).data.academyId, get(matchPath(matchId)).data.teamId)).data.maxSubstitutes
+          && request.resource.data.updatedBy == request.auth.uid
+          && request.resource.data.updatedAt == request.time;
+
+        allow delete: if false;
+      }
+
+      // Convocados: matches/{matchId}/callups/{playerId}
+      // Las copias (isMinor, playerUserId, guardianIds) deben coincidir con el jugador al convocarlo;
+      // para responder se usa SIEMPRE el jugador real (isResponder).
+      match /callups/{playerId} {
+        // El DT del equipo y el ADM ven a todos los convocados
+        allow list: if isDtOfTeam(get(matchPath(matchId)).data.academyId, get(matchPath(matchId)).data.teamId)
+          || isAdmOf(get(matchPath(matchId)).data.academyId);
+        // La familia lee la convocatoria de SU jugador (por ID; si no está convocado, no existe)
+        allow get: if isDtOfTeam(get(matchPath(matchId)).data.academyId, get(matchPath(matchId)).data.teamId)
+          || isAdmOf(get(matchPath(matchId)).data.academyId)
+          || isFamily(get(playerPath(playerId)).data);
+
+        // Convocar (el DT del equipo, con el partido abierto) a un jugador ACTIVO de ese equipo.
+        // Lecturas: perfil, equipo y partido (compartidas) + el jugador. La app convoca de 8 en 8.
+        allow create: if isDtOfTeam(get(matchPath(matchId)).data.academyId, get(matchPath(matchId)).data.teamId)
+          && matchOpen(get(matchPath(matchId)).data)
+          && request.resource.data.keys().hasOnly(['playerId', 'playerName', 'isMinor', 'playerUserId', 'guardianIds', 'response', 'createdAt'])
+          && request.resource.data.playerId == playerId
+          && get(playerPath(playerId)).data.academyId == get(matchPath(matchId)).data.academyId
+          && get(playerPath(playerId)).data.teamId == get(matchPath(matchId)).data.teamId
+          && get(playerPath(playerId)).data.active == true
+          // PRIVACIDAD: nombre corto ("Mateo R.")
+          && request.resource.data.playerName is string
+          && request.resource.data.playerName.size() > 0 && request.resource.data.playerName.size() <= 30
+          && request.resource.data.isMinor == get(playerPath(playerId)).data.isMinor
+          && request.resource.data.playerUserId == get(playerPath(playerId)).data.userId
+          && request.resource.data.guardianIds == get(playerPath(playerId)).data.guardianIds
+          && request.resource.data.response == 'SIN_CONFIRMAR'
+          && request.resource.data.createdAt == request.time;
+
+        // Responder "Confirmo" o "No puedo": solo quien responde por ese jugador, dentro del plazo,
+        // cambiando únicamente la respuesta y quién / cuándo respondió.
+        allow update: if canRespond(matchId, playerId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['response', 'respondedBy', 'respondedByName', 'respondedAt'])
+          && request.resource.data.response in ['CONFIRMADO', 'NO_PUEDE']
+          && request.resource.data.respondedBy == request.auth.uid
+          && request.resource.data.respondedByName is string && request.resource.data.respondedByName.size() <= 60
+          && request.resource.data.respondedAt == request.time;
+
+        allow delete: if false;
+      }
+
+      // Motivo de "No puedo", APARTE para que solo lo vea el DT: matches/{matchId}/callupReasons/{playerId}
+      match /callupReasons/{playerId} {
+        allow list: if isDtOfTeam(get(matchPath(matchId)).data.academyId, get(matchPath(matchId)).data.teamId);
+        // Quien lo escribió también lo lee (si aún no existe, quien responde puede consultarlo)
+        allow get: if isDtOfTeam(get(matchPath(matchId)).data.academyId, get(matchPath(matchId)).data.teamId)
+          || (isResponder(get(playerPath(playerId)).data)
+              && (resource == null || resource.data.writtenBy == request.auth.uid));
+
+        // Lo escribe quien responde, en la MISMA operación que la respuesta (el convocado queda con
+        // respondedAt == esta hora). Solo lleva texto si la respuesta es "No puede"; al confirmar queda vacío.
+        allow create, update: if canRespond(matchId, playerId)
+          && request.resource.data.keys().hasOnly(['reason', 'writtenBy', 'at'])
+          && request.resource.data.reason is string && request.resource.data.reason.size() <= 140
+          && request.resource.data.writtenBy == request.auth.uid
+          && request.resource.data.at == request.time
+          && existsAfter(callupPath(matchId, playerId))
+          && getAfter(callupPath(matchId, playerId)).data.respondedAt == request.time
+          && (request.resource.data.reason == ''
+              || getAfter(callupPath(matchId, playerId)).data.response == 'NO_PUEDE');
+
+        allow delete: if false;
+      }
+    }
+
+    // ---------- Base de la US-012: notificaciones dentro de la app (US-006) ----------
+    // La escribe la app de quien hace la acción, una por destinatario (plan gratuito: sin Cloud Functions).
+    // PRIVACIDAD: textos cortos sin datos sensibles (la app solo pone equipo, rival y fecha del partido).
+    match /notifications/{notificationId} {
+      // Cada persona lista solo las suyas (consulta con where recipientUid == su uid)
+      allow list: if signedIn() && resource.data.recipientUid == request.auth.uid;
+      // Una notificación la lee su destinatario. Quien la crea puede consultar si ya existe
+      // (resource == null) o leer la que él escribió: así un reintento salta las que ya se enviaron.
+      allow get: if signedIn()
+        && (resource == null
+            || resource.data.recipientUid == request.auth.uid
+            || resource.data.createdBy == request.auth.uid);
+
+      // Campos y textos válidos (cortos y sin datos sensibles) y el partido es de la MISMA academia
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['recipientUid', 'academyId', 'type', 'title', 'body', 'matchId', 'playerId', 'read', 'createdBy', 'createdAt'])
+        && validNoticeFields(request.resource.data)
+        && get(matchPath(request.resource.data.matchId)).data.academyId == request.resource.data.academyId
+        && validNoticeId(notificationId, request.resource.data)
+        && (dtMatchNotice(request.resource.data) || responseNotice(request.resource.data));
+
+      // Solo su destinatario la marca como leída (y solo eso)
+      allow update: if signedIn()
+        && resource.data.recipientUid == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read'])
+        && request.resource.data.read == true;
+
+      allow delete: if false;
+    }
+
+    // ---------- Notificaciones: funciones ----------
+
+    function validNoticeFields(data) {
+      return data.recipientUid is string && data.recipientUid != '' && data.recipientUid != request.auth.uid
+        && data.academyId is string
+        && data.type in ['CONVOCATORIA', 'RESPUESTA', 'PARTIDO_REPROGRAMADO', 'PARTIDO_CANCELADO']
+        && data.title is string && data.title.size() > 0 && data.title.size() <= 80
+        && data.body is string && data.body.size() <= 160
+        && data.matchId is string && data.matchId.size() > 0 && data.matchId.size() <= 40
+        && data.playerId is string && data.playerId.size() > 0
+        && data.read == false
+        && data.createdBy == request.auth.uid
+        && data.createdAt == request.time;
+    }
+
+    // ID fijo {tipo}_{matchId}_{uid} (un reintento no duplica). La reprogramación y la respuesta
+    // llevan además la marca de tiempo del cambio: _{milisegundos}.
+    function validNoticeId(notificationId, data) {
+      return (data.type in ['CONVOCATORIA', 'PARTIDO_CANCELADO']
+              && notificationId == data.type + '_' + data.matchId + '_' + data.recipientUid)
+        || (data.type in ['PARTIDO_REPROGRAMADO', 'RESPUESTA']
+              && notificationId.matches('^' + data.type + '_' + data.matchId + '_' + data.recipientUid + '_[0-9]+$'));
+    }
+
+    // Convocatoria, reprogramación y cancelación: solo el DT del equipo del partido, y el destinatario
+    // es el jugador mayor (playerUserId) o un apoderado de ESE convocado.
+    // Lecturas: mi perfil, el equipo y el partido (compartidas en el lote) + el convocado.
+    function dtMatchNotice(data) {
+      let m = get(matchPath(data.matchId)).data;
+      let c = get(callupPath(data.matchId, data.playerId)).data;
+      return data.type in ['CONVOCATORIA', 'PARTIDO_REPROGRAMADO', 'PARTIDO_CANCELADO']
+        && isDtOfTeam(m.academyId, m.teamId)
+        && ((c.playerUserId != '' && data.recipientUid == c.playerUserId)
+            || data.recipientUid in c.guardianIds);
+    }
+
+    // Nueva respuesta: la crea quien puede responder por ese convocado, solo para el DT que creó el
+    // partido, y ese DT sigue activo y a cargo del equipo. Lecturas: perfil, partido, academia, jugador y el DT.
+    function responseNotice(data) {
+      let m = get(matchPath(data.matchId)).data;
+      let dt = get(userPath(data.recipientUid)).data;
+      return data.type == 'RESPUESTA'
+        && canRespond(data.matchId, data.playerId)
+        && data.recipientUid == m.createdBy
+        && dt.role == 'DT' && dt.status == 'active' && dt.teamId == m.teamId
+        && dt.academyId == m.academyId;
     }
 
     // Todo lo demás queda cerrado hasta que lo abra su historia de usuario.

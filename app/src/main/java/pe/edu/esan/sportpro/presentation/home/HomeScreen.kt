@@ -51,6 +51,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -79,6 +81,7 @@ fun sectionsFor(role: String): List<HomeSection> = when (role) {
         HomeSection("academia", "Academia y equipos", "US-002", Icons.Outlined.Groups),
         HomeSection("invitaciones", "Usuarios e invitaciones", "US-002", Icons.Outlined.ConfirmationNumber),
         HomeSection("catalogo", "Catálogo de eventos", "US-007", Icons.AutoMirrored.Outlined.ListAlt),
+        HomeSection("partidos", "Partidos", "US-006", Icons.Outlined.SportsSoccer),   // solo lectura
         HomeSection("mensualidades", "Mensualidades", "US-004", Icons.Outlined.Payments),
         HomeSection("avisos", "Avisos de pruebas", "US-014", Icons.Outlined.Campaign),
         HomeSection("moderacion", "Moderación", "US-013", Icons.Outlined.Flag),
@@ -120,8 +123,11 @@ fun HomeScreen(
     profile: UserProfile?,
     onOpenSection: (HomeSection) -> Unit,
     onMyProfile: () -> Unit,
-    onSignOut: () -> Unit
+    onSignOut: () -> Unit,
+    unreadNotifications: Int = 0      // insignia del acceso "Notificaciones"
 ) {
+    // Número que se muestra sobre cada sección (por ahora solo las notificaciones sin leer)
+    val badgeOf: (HomeSection) -> Int = { if (it.id == "notificaciones") unreadNotifications else 0 }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()   // solo para abrir y cerrar el menú (animación de la interfaz)
     val sections = sectionsFor(profile?.role.orEmpty())
@@ -153,7 +159,7 @@ fun HomeScreen(
 
                     DrawerItem("Inicio", Icons.Outlined.Home, selected = true) { scope.launch { drawerState.close() } }
                     sections.forEach { section ->
-                        DrawerItem(section.title, section.icon) {
+                        DrawerItem(section.title, section.icon, badge = badgeOf(section)) {
                             scope.launch { drawerState.close() }
                             onOpenSection(section)
                         }
@@ -215,7 +221,7 @@ fun HomeScreen(
                 sections.chunked(2).forEach { pair ->
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
                         pair.forEach { section ->
-                            QuickTile(section, Modifier.weight(1f)) { onOpenSection(section) }
+                            QuickTile(section, Modifier.weight(1f), badge = badgeOf(section)) { onOpenSection(section) }
                         }
                         if (pair.size == 1) Spacer(Modifier.weight(1f))
                     }
@@ -227,10 +233,11 @@ fun HomeScreen(
 }
 
 @Composable
-private fun DrawerItem(label: String, icon: ImageVector, selected: Boolean = false, onClick: () -> Unit) {
+private fun DrawerItem(label: String, icon: ImageVector, selected: Boolean = false, badge: Int = 0, onClick: () -> Unit) {
     NavigationDrawerItem(
         label = { Text(label, fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Bold, fontSize = 16.sp) },
         icon = { Icon(icon, contentDescription = null) },
+        badge = if (badge > 0) ({ CountBadge(badge) }) else null,
         selected = selected,
         onClick = onClick,
         shape = RoundedCornerShape(50),
@@ -247,24 +254,47 @@ private fun DrawerItem(label: String, icon: ImageVector, selected: Boolean = fal
 }
 
 @Composable
-private fun QuickTile(section: HomeSection, modifier: Modifier, onClick: () -> Unit) {
+private fun QuickTile(section: HomeSection, modifier: Modifier, badge: Int = 0, onClick: () -> Unit) {
     Column(
         modifier = modifier
             .heightIn(min = 104.dp)
             .clip(RoundedCornerShape(22.dp))
             .background(Tarjeta)
             .clickable(onClick = onClick)
-            .padding(14.dp),
+            .padding(14.dp)
+            // TalkBack: "Notificaciones, 3 sin leer"
+            .semantics(mergeDescendants = true) {
+                if (badge > 0) contentDescription = "${section.title}, $badge sin leer"
+            },
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Box(
-            Modifier.size(42.dp).clip(RoundedCornerShape(14.dp)).background(SuperficieSuave),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(section.icon, contentDescription = null, tint = Turquesa, modifier = Modifier.size(22.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(42.dp).clip(RoundedCornerShape(14.dp)).background(SuperficieSuave),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(section.icon, contentDescription = null, tint = Turquesa, modifier = Modifier.size(22.dp))
+            }
+            Spacer(Modifier.weight(1f))
+            if (badge > 0) CountBadge(badge)
         }
         Text(section.title, fontWeight = FontWeight.ExtraBold, fontSize = 15.sp, color = TextoPrincipal)
     }
+}
+
+// Insignia con un número (ej. notificaciones sin leer). Más de 99 se muestra "99+".
+@Composable
+private fun CountBadge(count: Int) {
+    Text(
+        if (count > 99) "99+" else count.toString(),
+        color = Tarjeta,
+        fontWeight = FontWeight.Black,
+        fontSize = 13.sp,
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(Turquesa)
+            .padding(horizontal = 9.dp, vertical = 3.dp)
+    )
 }
 
 @Composable

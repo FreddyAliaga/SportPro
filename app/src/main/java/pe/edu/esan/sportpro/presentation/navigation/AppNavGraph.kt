@@ -36,6 +36,18 @@ import pe.edu.esan.sportpro.presentation.auth.MinorBlockedScreen
 import pe.edu.esan.sportpro.presentation.auth.RegisterViewModel
 import pe.edu.esan.sportpro.presentation.auth.VerifyEmailScreen
 import pe.edu.esan.sportpro.presentation.auth.WelcomeScreen
+import pe.edu.esan.sportpro.presentation.callup.CallupViewModel
+import pe.edu.esan.sportpro.presentation.callup.CallupsScreen
+import pe.edu.esan.sportpro.presentation.notification.NotificationViewModel
+import pe.edu.esan.sportpro.presentation.notification.NotificationsScreen
+import pe.edu.esan.sportpro.presentation.match.LineupScreen
+import pe.edu.esan.sportpro.presentation.match.MatchDetailScreen
+import pe.edu.esan.sportpro.presentation.match.MatchFormScreen
+import pe.edu.esan.sportpro.presentation.match.MatchListScreen
+import pe.edu.esan.sportpro.presentation.match.MatchViewModel
+import pe.edu.esan.sportpro.presentation.catalog.CatalogScreen
+import pe.edu.esan.sportpro.presentation.catalog.CatalogViewModel
+import pe.edu.esan.sportpro.presentation.catalog.EventTypeFormScreen
 import pe.edu.esan.sportpro.presentation.home.ComingSoonScreen
 import pe.edu.esan.sportpro.presentation.home.HomeScreen
 import pe.edu.esan.sportpro.presentation.home.SplashScreen
@@ -61,10 +73,21 @@ fun AppNavGraph() {
     val academyViewModel: AcademyViewModel = viewModel()
     // US-003: plantel y perfil del jugador (DT, ADM, PAD y JUG)
     val playerViewModel: PlayerViewModel = viewModel()
+    // US-007: catálogo de eventos (el ADM lo edita; el DT lo ve)
+    val catalogViewModel: CatalogViewModel = viewModel()
+    // US-006: partidos y convocatoria (DT y ADM) / convocatorias (PAD y JUG)
+    val matchViewModel: MatchViewModel = viewModel()
+    val callupViewModel: CallupViewModel = viewModel()
+    // Base de la US-012: bandeja de notificaciones dentro de la app (todos los roles)
+    val notificationViewModel: NotificationViewModel = viewModel()
 
     val closeSession: () -> Unit = {
+        notificationViewModel.stop()
         academyViewModel.stop()
         playerViewModel.stop()
+        catalogViewModel.stop()
+        matchViewModel.stop()
+        callupViewModel.stop()
         loginViewModel.signOut()
         registerViewModel.signOutAndReset()
     }
@@ -197,14 +220,29 @@ fun AppNavGraph() {
         // ---------- Inicio por rol ----------
         composable("home") {
             val state by loginViewModel.uiState.collectAsState()
+            // US-007: al entrar el ADM al inicio, si su academia no tiene catálogo de eventos se crea el de fábrica
+            LaunchedEffect(state.profile) {
+                state.profile?.takeIf { it.role == "ADM" }?.let { catalogViewModel.start(it) }
+                // Insignia de notificaciones sin leer (todos los roles)
+                state.profile?.let { notificationViewModel.start(it) }
+            }
+            val unread = notificationViewModel.uiState.collectAsState().value.unreadCount
             HomeScreen(
                 profile = state.profile,
+                unreadNotifications = unread,
                 onOpenSection = { section ->
                     when (section.id) {
                         "academia" -> navController.navigate("academy")              // US-002
                         "invitaciones" -> navController.navigate("academy_users")    // US-002
                         "plantel" -> navController.navigate("roster")                // US-003 (DT)
                         "jugadores" -> navController.navigate("my_players")          // US-003 (PAD)
+                        "catalogo" -> navController.navigate("catalog")              // US-007 (ADM)
+                        "convocatorias" -> navController.navigate("callups")         // US-006 (PAD y JUG)
+                        "notificaciones" -> navController.navigate("notifications")  // base de la US-012 (todos)
+                        // US-006: "Partidos" del DT y del ADM. El del PAD/JUG es de la US-010.
+                        "partidos" ->
+                            if (state.profile?.role in listOf("DT", "ADM")) navController.navigate("matches")
+                            else navController.navigate("section/partidos")
                         else -> navController.navigate("section/${section.id}")
                     }
                 },
@@ -430,6 +468,166 @@ fun AppNavGraph() {
             InvitePlayerScreen(viewModel = playerViewModel, onDone = { navController.popBackStack() })
         }
 
+        // ---------- US-007 · Catálogo de eventos (ADM edita; DT solo lectura) ----------
+        composable("catalog") {
+            StartCatalog(loginViewModel, catalogViewModel)
+            val back = backClearingMessages(navController, catalogViewModel::clearMessages)
+            CatalogScreen(
+                viewModel = catalogViewModel,
+                onBack = back,
+                onNewType = {
+                    catalogViewModel.startNew()
+                    navController.navigate("catalog_type")
+                },
+                onEditType = { type ->
+                    catalogViewModel.startEdit(type)
+                    navController.navigate("catalog_type?typeId=${type.id}")
+                }
+            )
+        }
+        // "Nuevo tipo" = catalog_type; "Editar tipo" = catalog_type?typeId=… (el id en la ruta sirve para
+        // volver a cargarlo si Android cerró la app)
+        composable(
+            "catalog_type?typeId={typeId}",
+            arguments = listOf(navArgument("typeId") { type = NavType.StringType; defaultValue = "" })
+        ) { backStackEntry ->
+            StartCatalog(loginViewModel, catalogViewModel)
+            val back = backClearingMessages(navController, catalogViewModel::clearMessages)
+            val typeId = backStackEntry.arguments?.getString("typeId").orEmpty()
+            val loaded = catalogViewModel.uiState.collectAsState().value.loaded
+            val canEdit = catalogViewModel.uiState.collectAsState().value.canEdit
+            LaunchedEffect(typeId, loaded) {
+                if (!catalogViewModel.restoreForm(typeId)) navController.popBackStack()
+            }
+            // Solo el ADM edita (el DT no llega aquí; si llegara, vuelve a la lista)
+            LaunchedEffect(canEdit, loaded) {
+                if (loaded && !canEdit) navController.popBackStack()
+            }
+            EventTypeFormScreen(
+                viewModel = catalogViewModel,
+                onBack = back,
+                onSaved = { navController.popBackStack() }
+            )
+        }
+
+        // ---------- US-006 · Partidos y convocatoria (DT gestiona; ADM solo lectura) ----------
+        composable("matches") {
+            StartMatches(loginViewModel, matchViewModel)
+            val back = backClearingMessages(navController, matchViewModel::clearMessages)
+            MatchListScreen(
+                viewModel = matchViewModel,
+                onBack = back,
+                onNewMatch = {
+                    matchViewModel.startNewMatch()
+                    navController.navigate("match_new")
+                },
+                onOpenMatch = { match -> navController.navigate("match/${match.id}") },
+                onOpenCatalog = { navController.navigate("catalog") }   // US-007: el DT lo ve en solo lectura
+            )
+        }
+        composable("match_new") {
+            StartMatches(loginViewModel, matchViewModel)
+            val back = backClearingMessages(navController, matchViewModel::clearMessages)
+            MatchFormScreen(
+                viewModel = matchViewModel,
+                title = "Nuevo partido",
+                subtitle = "Luego eliges a los convocados y publicas la convocatoria.",
+                buttonText = "Crear partido",
+                onBack = back,
+                onSubmit = {
+                    // Se abre el detalle del partido nuevo (para convocar) en lugar del formulario
+                    matchViewModel.createMatch { matchId ->
+                        navController.navigate("match/$matchId") { popUpTo("match_new") { inclusive = true } }
+                    }
+                }
+            )
+        }
+        // El id en la ruta sirve para volver a cargar el partido si Android cerró la app
+        composable("match/{matchId}") { backStackEntry ->
+            StartMatches(loginViewModel, matchViewModel)
+            val back = backClearingMessages(navController, matchViewModel::clearMessages)
+            val matchId = backStackEntry.arguments?.getString("matchId").orEmpty()
+            val profile = loginViewModel.uiState.collectAsState().value.profile
+            LaunchedEffect(matchId, profile) { if (profile != null) matchViewModel.selectMatch(matchId) }
+            MatchDetailScreen(
+                viewModel = matchViewModel,
+                onBack = back,
+                onLineup = { navController.navigate("match/$matchId/lineup") },
+                onReschedule = {
+                    matchViewModel.startReschedule()
+                    navController.navigate("match/$matchId/edit")
+                }
+            )
+        }
+        // Parte C · Alineación (DT edita hasta el inicio; ADM solo lectura)
+        composable("match/{matchId}/lineup") { backStackEntry ->
+            StartMatches(loginViewModel, matchViewModel)
+            // Al salir sin guardar se descarta el borrador (la próxima vez se llena con la alineación guardada)
+            val back = backClearingMessages(navController) {
+                matchViewModel.clearMessages()
+                matchViewModel.discardLineupDraft()
+            }
+            val matchId = backStackEntry.arguments?.getString("matchId").orEmpty()
+            val state by matchViewModel.uiState.collectAsState()
+            LaunchedEffect(matchId, state.profile) { if (state.profile != null) matchViewModel.selectMatch(matchId) }
+            // El borrador se llena cuando llegan la alineación y los convocados
+            LaunchedEffect(state.lineupLoaded, state.callupsLoaded, state.selectedMatchId) { matchViewModel.ensureLineupDraft() }
+            LineupScreen(
+                viewModel = matchViewModel,
+                onBack = back,
+                onSaved = {
+                    matchViewModel.discardLineupDraft()
+                    navController.popBackStack()
+                }
+            )
+        }
+        // Parte C · Reprogramar (fecha, hora o lugar; el rival no cambia)
+        composable("match/{matchId}/edit") { backStackEntry ->
+            StartMatches(loginViewModel, matchViewModel)
+            val back = backClearingMessages(navController, matchViewModel::clearMessages)
+            val matchId = backStackEntry.arguments?.getString("matchId").orEmpty()
+            val state by matchViewModel.uiState.collectAsState()
+            LaunchedEffect(matchId, state.profile) { if (state.profile != null) matchViewModel.selectMatch(matchId) }
+            LaunchedEffect(state.match?.id) { matchViewModel.restoreRescheduleForm() }
+            MatchFormScreen(
+                viewModel = matchViewModel,
+                title = "Reprogramar partido",
+                subtitle = "Cambia la fecha, la hora o el lugar. Las respuestas de la convocatoria se mantienen y avisamos a los convocados.",
+                buttonText = "Guardar cambios",
+                onBack = back,
+                onSubmit = { matchViewModel.saveReschedule { navController.popBackStack() } },
+                rivalEditable = false
+            )
+        }
+
+        // ---------- US-006 · Convocatorias (PAD y JUG) ----------
+        composable("callups") {
+            StartCallups(loginViewModel, callupViewModel)
+            val back = backClearingMessages(navController, callupViewModel::clearMessages)
+            CallupsScreen(viewModel = callupViewModel, onBack = back)
+        }
+
+        // ---------- Base de la US-012 · Notificaciones dentro de la app (todos los roles) ----------
+        composable("notifications") {
+            val profile = loginViewModel.uiState.collectAsState().value.profile
+            LaunchedEffect(profile) {
+                if (profile != null) notificationViewModel.start(profile) else loginViewModel.ensureProfile()
+            }
+            val back = backClearingMessages(navController, notificationViewModel::clearMessages)
+            NotificationsScreen(
+                viewModel = notificationViewModel,
+                onBack = back,
+                onOpen = { notification ->
+                    // Abre la pantalla relacionada: el partido (DT y ADM) o "Convocatorias" (PAD y JUG)
+                    when {
+                        notification.matchId.isEmpty() -> Unit
+                        profile?.role in listOf("DT", "ADM") -> navController.navigate("match/${notification.matchId}")
+                        profile?.role in listOf("PAD", "JUG") -> navController.navigate("callups")
+                    }
+                }
+            )
+        }
+
         // ---------- US-002 · Registrar mi academia (luego sigue "Crea tu cuenta" y "Revisa tu correo") ----------
         composable("register_academy") {
             val state by registerViewModel.uiState.collectAsState()
@@ -495,6 +693,33 @@ private fun StartAcademy(loginViewModel: LoginViewModel, academyViewModel: Acade
     val profile = loginViewModel.uiState.collectAsState().value.profile
     LaunchedEffect(profile) {
         if (profile != null) academyViewModel.start(profile) else loginViewModel.ensureProfile()
+    }
+}
+
+// US-007: el catálogo escucha los tipos de evento de la academia del perfil con sesión (ADM o DT)
+@Composable
+private fun StartCatalog(loginViewModel: LoginViewModel, catalogViewModel: CatalogViewModel) {
+    val profile = loginViewModel.uiState.collectAsState().value.profile
+    LaunchedEffect(profile) {
+        if (profile != null) catalogViewModel.start(profile) else loginViewModel.ensureProfile()
+    }
+}
+
+// US-006: los partidos escuchan según el perfil con sesión (DT: su equipo; ADM: toda la academia)
+@Composable
+private fun StartMatches(loginViewModel: LoginViewModel, matchViewModel: MatchViewModel) {
+    val profile = loginViewModel.uiState.collectAsState().value.profile
+    LaunchedEffect(profile) {
+        if (profile != null) matchViewModel.start(profile) else loginViewModel.ensureProfile()
+    }
+}
+
+// US-006: las convocatorias del apoderado (sus hijos) o del jugador mayor (la suya)
+@Composable
+private fun StartCallups(loginViewModel: LoginViewModel, callupViewModel: CallupViewModel) {
+    val profile = loginViewModel.uiState.collectAsState().value.profile
+    LaunchedEffect(profile) {
+        if (profile != null) callupViewModel.start(profile) else loginViewModel.ensureProfile()
     }
 }
 

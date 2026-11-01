@@ -18,6 +18,7 @@ object InvitationRepository {
     fun normalize(code: String): String = code.trim().uppercase()
 
     suspend fun findValidInvitation(rawCode: String): Result<Invitation> {
+        if (!ConnectionChecker.isOnline()) return ConnectionChecker.noConnection()
         return try {
             val code = normalize(rawCode)
             if (code.isEmpty()) throw IllegalArgumentException(INVALID_CODE_MESSAGE)

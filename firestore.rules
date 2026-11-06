@@ -6,6 +6,8 @@ rules_version = '2';
 // US-003 (plantel y perfil del jugador, códigos JUG/PAD)
 // US-006 (partidos, convocatoria, respuestas y alineación)
 // US-007 (catálogo configurable de tipos de evento)
+// US-008 (operadores, cronómetro, eventos del partido, observaciones y directorio de la academia)
+// US-010 (lectura en tiempo real de eventos por los miembros de la academia)
 // Notificaciones: bandeja dentro de la app (base de la US-012).
 // Se amplían en US-016.
 service cloud.firestore {
@@ -473,6 +475,42 @@ service cloud.firestore {
 
         allow delete: if false;
       }
+
+      // US-008: directorio mínimo de la academia (para elegir operadores del partido).
+      // PRIVACIDAD: solo nombre, rol y estado; nunca correo, celular ni fecha de nacimiento.
+      // Lo leen solo el DT y el ADM de la academia.
+      match /members/{uid} {
+        allow read: if isMemberOf(academyId) && myProfile().role in ['DT', 'ADM'];
+
+        // Cada usuario ACTIVO escribe su propia ficha, con el nombre y el rol de SU perfil real
+        allow create, update: if signedIn()
+          && request.auth.uid == uid
+          && isMemberOf(academyId)
+          && validMember(request.resource.data)
+          && request.resource.data.name == myProfile().name
+          && request.resource.data.role == myProfile().role
+          && request.resource.data.status == 'active';
+
+        // El ADM la deja al día al desactivar o reactivar una cuenta: nombre, rol y estado deben ser los
+        // del perfil real DESPUÉS del cambio (misma operación)
+        allow create, update: if isAdmOf(academyId)
+          && validMember(request.resource.data)
+          && getAfter(userPath(uid)).data.academyId == academyId
+          && request.resource.data.name == getAfter(userPath(uid)).data.name
+          && request.resource.data.role == getAfter(userPath(uid)).data.role
+          && request.resource.data.status == getAfter(userPath(uid)).data.status;
+
+        allow delete: if false;
+      }
+    }
+
+    // US-008: ficha válida del directorio
+    function validMember(data) {
+      return data.keys().hasOnly(['name', 'role', 'status', 'updatedAt'])
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 80
+        && data.role in ['ADM', 'DT', 'JUG', 'PAD']
+        && data.status in ['active', 'inactive']
+        && data.updatedAt == request.time;
     }
 
     // ---------- US-007 ----------
@@ -749,7 +787,100 @@ service cloud.firestore {
         && request.resource.data.status == 'CANCELADO'
         && request.resource.data.updatedAt == request.time;
 
+      // US-008 (RN-010): el DT del equipo designa hasta 5 operadores, usuarios ACTIVOS de su academia,
+      // mientras el partido no esté Finalizado ni Cancelado. Lecturas: perfil, equipo y hasta 5 usuarios (7 de 10).
+      allow update: if isDtOfTeam(resource.data.academyId, resource.data.teamId)
+        && !(resource.data.status in ['FINALIZADO', 'CANCELADO'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['operatorIds', 'updatedAt'])
+        && validOperators(request.resource.data.operatorIds, resource.data.academyId)
+        && request.resource.data.updatedAt == request.time;
+
+      // US-008: el DT o un operador cambian SOLO el estado y el cronómetro (la app exige conexión para esto):
+      //  - 'inicio': Programado/Convocado -> En curso (cronómetro corriendo desde 0), con el evento 'inicio'
+      //    (startEventId) creado en el MISMO lote
+      //  - pausar (solo si corría) / reanudar (solo si estaba en pausa) mientras está En curso
+      //  - 'fin': En curso -> Finalizado (cronómetro detenido), con el evento 'fin' (endEventId) en el MISMO lote
+      // Lecturas: perfil, equipo y el evento (3 de 10).
+      allow update: if canRecord(resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['status', 'clockRunning', 'clockRunningSince', 'clockElapsedMs', 'startedAt', 'finishedAt',
+                       'startEventId', 'endEventId', 'updatedAt'])
+        && validClock(request.resource.data)
+        && request.resource.data.updatedAt == request.time
+        && (
+            // Pausar: corría y se detiene; lo acumulado crece a lo mucho el tiempo real transcurrido (+60 s de margen)
+            (resource.data.status == 'EN_CURSO' && unchanged('status')
+              && unchanged('startedAt') && unchanged('finishedAt')
+              && unchanged('startEventId') && unchanged('endEventId')
+              && resource.data.clockRunning == true && request.resource.data.clockRunning == false
+              && stoppedElapsedOk())
+            // Reanudar: estaba en pausa y vuelve a correr; lo acumulado no cambia
+            || (resource.data.status == 'EN_CURSO' && unchanged('status')
+              && unchanged('startedAt') && unchanged('finishedAt')
+              && unchanged('startEventId') && unchanged('endEventId')
+              && resource.data.clockRunning == false && request.resource.data.clockRunning == true
+              && unchanged('clockElapsedMs'))
+            // 'inicio'
+            || (resource.data.status in ['PROGRAMADO', 'CONVOCADO']
+              && request.resource.data.status == 'EN_CURSO'
+              && request.resource.data.startedAt == request.time
+              && request.resource.data.clockRunning == true
+              && request.resource.data.clockElapsedMs == 0
+              && unchanged('finishedAt') && unchanged('endEventId')
+              && request.resource.data.startEventId is string
+              && existsAfter(eventPath(matchId, request.resource.data.startEventId))
+              && getAfter(eventPath(matchId, request.resource.data.startEventId)).data.typeId == 'inicio')
+            // 'fin'
+            || (resource.data.status == 'EN_CURSO'
+              && request.resource.data.status == 'FINALIZADO'
+              && request.resource.data.finishedAt == request.time
+              && request.resource.data.clockRunning == false
+              && stoppedElapsedOk()
+              && unchanged('startedAt') && unchanged('startEventId')
+              && request.resource.data.endEventId is string
+              && existsAfter(eventPath(matchId, request.resource.data.endEventId))
+              && getAfter(eventPath(matchId, request.resource.data.endEventId)).data.typeId == 'fin')
+          );
+
       allow delete: if false;
+
+      // US-008 / US-010: eventos del partido: matches/{matchId}/events/{eventId}
+      // Los leen los miembros activos de la academia (listeners en tiempo real).
+      // Los crean el DT del equipo o un operador. El ID es un UUID creado en el teléfono (RN-013).
+      // Nunca se editan ni se borran por ahora (la US-009 abrirá la corrección con versiones).
+      // Lecturas: partido (antes y después), perfil, equipo, tipo de evento y la observación (6 de 10).
+      match /events/{eventId} {
+        allow read: if isMemberOf(get(matchPath(matchId)).data.academyId);
+
+        allow create: if canRecord(get(matchPath(matchId)).data)
+          && eventId.matches('^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+          && validEvent(request.resource.data,
+               get(eventTypePath(get(matchPath(matchId)).data.academyId, request.resource.data.typeId)).data)
+          && eventMomentOk(matchId, eventId, request.resource.data)
+          // hasNote dice la verdad: la observación se crea en el MISMO lote
+          && request.resource.data.hasNote == existsAfter(eventNotePath(matchId, eventId));
+
+        allow update, delete: if false;
+      }
+
+      // US-008: observación de un evento, APARTE para que solo la lean el DT, los operadores y el ADM
+      match /eventNotes/{eventId} {
+        allow read: if canSeeNotes(get(matchPath(matchId)).data);
+
+        // Se crea en el mismo lote que su evento, por la misma persona
+        allow create: if canRecord(get(matchPath(matchId)).data)
+          && request.resource.data.keys().hasOnly(['note', 'createdBy', 'createdAt'])
+          && request.resource.data.note is string
+          && request.resource.data.note.size() > 0 && request.resource.data.note.size() <= 140
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.createdAt == request.time
+          && !exists(eventPath(matchId, eventId))
+          && existsAfter(eventPath(matchId, eventId))
+          && getAfter(eventPath(matchId, eventId)).data.createdBy == request.auth.uid
+          && getAfter(eventPath(matchId, eventId)).data.hasNote == true;
+
+        allow update, delete: if false;
+      }
 
       // Alineación: matches/{matchId}/lineup/current (RN-009). La leen los miembros de la academia.
       // Solo el DT del equipo la arma o cambia, con el partido abierto (antes del inicio),
@@ -842,6 +973,132 @@ service cloud.firestore {
 
         allow delete: if false;
       }
+    }
+
+    // ---------- US-008: funciones del registro del partido ----------
+
+    function eventPath(matchId, eventId) {
+      return /databases/$(database)/documents/matches/$(matchId)/events/$(eventId);
+    }
+
+    function eventNotePath(matchId, eventId) {
+      return /databases/$(database)/documents/matches/$(matchId)/eventNotes/$(eventId);
+    }
+
+    function eventTypePath(academyId, typeId) {
+      return /databases/$(database)/documents/academies/$(academyId)/eventTypes/$(typeId);
+    }
+
+    // Operador designado del partido, con su cuenta ACTIVA en la academia
+    function isOperatorOf(m) {
+      return isMemberOf(m.academyId) && request.auth.uid in m.get('operatorIds', []);
+    }
+
+    // Registra el partido: el DT del equipo o un operador (RN-010)
+    function canRecord(m) {
+      return isDtOfTeam(m.academyId, m.teamId) || isOperatorOf(m);
+    }
+
+    // Ven las observaciones: el DT del equipo, el ADM y los operadores
+    function canSeeNotes(m) {
+      return isDtOfTeam(m.academyId, m.teamId) || isAdmOf(m.academyId) || isOperatorOf(m);
+    }
+
+    // El operador número i (si existe) es un usuario ACTIVO de la academia.
+    // Las reglas no tienen bucles: se revisa cada índice posible (máximo 5).
+    function validOperatorAt(ops, i, academyId) {
+      return ops.size() <= i
+        || (ops[i] is string
+            && get(userPath(ops[i])).data.academyId == academyId
+            && get(userPath(ops[i])).data.status == 'active');
+    }
+
+    function validOperators(ops, academyId) {
+      return ops is list && ops.size() <= 5
+        && validOperatorAt(ops, 0, academyId) && validOperatorAt(ops, 1, academyId)
+        && validOperatorAt(ops, 2, academyId) && validOperatorAt(ops, 3, academyId)
+        && validOperatorAt(ops, 4, academyId);
+    }
+
+    // Cronómetro: corriendo desde la hora del servidor de ESTA escritura, o en pausa (sin hora).
+    // Lo acumulado es un entero de milisegundos (hasta 24 horas; la app usa el mismo límite).
+    function validClock(data) {
+      return data.clockRunning is bool
+        && data.clockElapsedMs is int && data.clockElapsedMs >= 0 && data.clockElapsedMs <= 86400000
+        && ((data.clockRunning == true && data.clockRunningSince == request.time)
+            || (data.clockRunning == false && data.clockRunningSince == null));
+    }
+
+    // Al detener el cronómetro (pausar o 'fin'): si corría, lo acumulado no baja y crece a lo mucho el tiempo
+    // real desde clockRunningSince, con 60 s de margen (los relojes de los emuladores se desfasan);
+    // si ya estaba en pausa, no cambia.
+    function stoppedElapsedOk() {
+      return (resource.data.clockRunning == true
+              && request.resource.data.clockElapsedMs >= resource.data.clockElapsedMs
+              && request.resource.data.clockElapsedMs <= resource.data.clockElapsedMs
+                   + (request.time.toMillis() - resource.data.clockRunningSince.toMillis()) + 60000)
+        || (resource.data.clockRunning == false
+              && request.resource.data.clockElapsedMs == resource.data.clockElapsedMs);
+    }
+
+    // Evento válido. type = el tipo del catálogo de la academia (debe existir).
+    // Se copian nombre, ícono, color y "afecta el marcador" (RN-011); este último debe ser el del catálogo.
+    function validEvent(data, type) {
+      return data.keys().hasOnly(['typeId', 'typeName', 'typeIcon', 'typeColor', 'affectsScore', 'minute', 'side',
+                                  'playerId', 'playerName', 'rivalNumber', 'playerOutId', 'playerOutName', 'hasNote',
+                                  'pendingIdentification', 'late', 'postInsert', 'status', 'version',
+                                  'createdBy', 'createdByName', 'createdAt', 'clientCreatedAt'])
+        && data.typeName is string && data.typeName.size() > 0 && data.typeName.size() <= 30
+        && data.typeIcon in ['balon', 'inicio', 'fin', 'tarjeta', 'cambio', 'silbato', 'penal', 'prohibido',
+                             'banderin', 'mano', 'escudo', 'reloj', 'advertencia', 'estrella']
+        && data.typeColor in ['#0E6B6F', '#2E7D32', '#1565C0', '#F2B705', '#C2410C', '#6A4C93', '#5F6B6D', '#E8710A']
+        && data.affectsScore == type.affectsScore
+        && data.minute is int && data.minute >= 1 && data.minute <= 130
+        // Equipo: solo si el tipo lo pide
+        && ((type.requiresTeam == true && data.side in ['LOCAL', 'RIVAL'])
+            || (type.requiresTeam == false && data.side == ''))
+        // Jugador nuestro (nombre corto) solo si es de nuestro equipo; dorsal solo si es del rival
+        && data.playerId is string && data.playerName is string && data.playerName.size() <= 30
+        && (data.playerId == '') == (data.playerName == '')
+        && data.playerOutId is string && data.playerOutName is string && data.playerOutName.size() <= 30
+        && (data.playerOutId == '') == (data.playerOutName == '')
+        && (data.playerOutId == '' || data.typeId == 'cambio')
+        && (data.side == 'LOCAL' || (data.playerId == '' && data.playerOutId == ''))
+        && (data.rivalNumber == null
+            || (data.side == 'RIVAL' && data.rivalNumber is int && data.rivalNumber >= 1 && data.rivalNumber <= 99))
+        && data.hasNote is bool && data.pendingIdentification is bool
+        && data.late is bool && data.postInsert is bool
+        && data.status == 'VIGENTE'
+        && data.version == 1
+        && data.createdBy == request.auth.uid
+        // el nombre de quien registra es el de su perfil real
+        && data.createdByName == myProfile().name
+        && data.createdAt == request.time
+        && data.clientCreatedAt is timestamp;
+    }
+
+    // Momento del partido en que se registra el evento:
+    //  - 'inicio': el partido estaba Programado/Convocado y queda En curso en esta misma escritura, con este evento
+    //    como startEventId
+    //  - 'fin': estaba En curso y queda Finalizado en esta misma escritura, con este evento como endEventId
+    //  - los demás: con el partido En curso; después del 'fin', como "Inserción posterior", o SIN inserción
+    //    posterior si se registró sin conexión ANTES del 'fin' y llegó después (su hora del teléfono es anterior
+    //    o igual a finishedAt y no está en el futuro)
+    function eventMomentOk(matchId, eventId, data) {
+      let before = get(matchPath(matchId)).data;
+      let after = getAfter(matchPath(matchId)).data;
+      return (data.typeId == 'inicio' && data.postInsert == false
+              && before.status in ['PROGRAMADO', 'CONVOCADO'] && after.status == 'EN_CURSO'
+              && after.get('startEventId', '') == eventId)
+        || (data.typeId == 'fin' && data.postInsert == false
+              && before.status == 'EN_CURSO' && after.status == 'FINALIZADO'
+              && after.get('endEventId', '') == eventId)
+        || (!(data.typeId in ['inicio', 'fin'])
+              && ((before.status == 'EN_CURSO' && data.postInsert == false)
+                  || (before.status == 'FINALIZADO' && data.postInsert == true)
+                  || (before.status == 'FINALIZADO' && data.postInsert == false
+                      && data.clientCreatedAt <= before.finishedAt
+                      && data.clientCreatedAt <= request.time)));
     }
 
     // ---------- Base de la US-012: notificaciones dentro de la app (US-006) ----------

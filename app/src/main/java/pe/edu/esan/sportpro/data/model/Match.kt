@@ -21,9 +21,47 @@ data class Match(
     val place: String = "",
     val status: String = MatchStatus.PROGRAMMED,
     val createdBy: String = "",          // DT que creó el partido (recibe el aviso de cada respuesta)
-    val callupPublishedAt: Date? = null
+    val callupPublishedAt: Date? = null,
+    // US-008 · Operadores que registran el partido (además del DT): hasta 5 usuarios activos de la academia (RN-010)
+    val operatorIds: List<String> = emptyList(),
+    // US-008 · Cronómetro. Minuto = (clockElapsedMs + tiempo desde clockRunningSince si está corriendo) / 60000 + 1
+    val clockRunning: Boolean = false,
+    val clockRunningSince: Date? = null, // hora del servidor en que se inició o reanudó (null = en pausa)
+    val clockElapsedMs: Long = 0L,       // milisegundos acumulados antes de la última pausa
+    val startedAt: Date? = null,         // evento 'inicio'
+    val finishedAt: Date? = null,        // evento 'fin'
+    val startEventId: String = "",       // ID del evento 'inicio' (la regla exige que exista en el mismo lote)
+    val endEventId: String = ""          // ID del evento 'fin'
 ) {
     fun hasStarted(now: Long = System.currentTimeMillis()): Boolean = (startsAt?.time ?: 0L) <= now
+
+    // US-008 · ¿Puede registrar el partido? El DT del equipo o un operador designado (las reglas lo vuelven a revisar)
+    fun canRecord(profile: UserProfile?): Boolean =
+        profile != null && profile.status == AccountStatus.ACTIVE && profile.academyId == academyId &&
+            ((profile.role == "DT" && profile.teamId == teamId) || profile.uid in operatorIds)
+
+    val isLive: Boolean get() = status == MatchStatus.LIVE
+    val isFinished: Boolean get() = status == MatchStatus.FINISHED
+
+    // Ya empezó a registrarse (en curso o finalizado): tiene marcador y cronología
+    val hasLiveData: Boolean get() = isLive || isFinished
+
+    // Milisegundos jugados según el cronómetro (sin negativos si el reloj del teléfono va atrasado)
+    fun clockMs(now: Long = System.currentTimeMillis()): Long {
+        val running = if (clockRunning) clockRunningSince?.let { (now - it.time).coerceAtLeast(0L) } ?: 0L else 0L
+        return clockElapsedMs + running
+    }
+
+    // Minuto actual del partido (1, 2, 3…; máximo 130). 0 = aún no empieza.
+    // Lo usan el registro (US-008), la vista en vivo (US-010) y, más adelante, US-009 y US-011.
+    fun currentMinute(now: Long = System.currentTimeMillis()): Int =
+        if (!hasLiveData) 0 else (clockMs(now) / MINUTE_MS + 1).toInt().coerceIn(EVENT_MINUTE_MIN, EVENT_MINUTE_MAX)
+
+    // Texto del cronómetro "23:07" (minutos y segundos jugados)
+    fun clockText(now: Long = System.currentTimeMillis()): String {
+        val totalSeconds = clockMs(now) / 1000
+        return "%02d:%02d".format(totalSeconds / 60, totalSeconds % 60)
+    }
 
     // Se puede convocar, armar la alineación, reprogramar o cancelar: antes del inicio y sin cancelar
     fun isOpen(now: Long = System.currentTimeMillis()): Boolean =
@@ -41,7 +79,19 @@ data class Match(
         (startsAt?.time ?: 0L) - now < noticeHours * HOUR_MS
 }
 
-// Valores del campo "status" (EN_CURSO y FINALIZADO los usará la US-008)
+// US-006 · Resultado de publicar la convocatoria o de comprobarla en el servidor
+sealed interface PublishCallupResult {
+    // Guardada: todos los convocados del partido, leídos del servidor (de ahí salen los destinatarios de los avisos)
+    data class Saved(val callups: List<Callup>) : PublishCallupResult
+
+    // No se pudo saber si se guardó: hay que comprobarlo con el servidor
+    data object Unconfirmed : PublishCallupResult
+
+    // No se guardó. savedEarlier = un lote anterior sí se guardó y sus avisos siguen pendientes.
+    data class Failed(val message: String, val savedEarlier: Boolean = false) : PublishCallupResult
+}
+
+// Valores del campo "status". EN_CURSO llega con el evento 'inicio' y FINALIZADO con 'fin' (US-008).
 object MatchStatus {
     const val PROGRAMMED = "PROGRAMADO"
     const val CALLED = "CONVOCADO"
@@ -210,6 +260,10 @@ fun Match.toForm(): MatchForm {
 }
 
 private const val HOUR_MS = 60L * 60 * 1000
+private const val MINUTE_MS = 60L * 1000
+
+// Máximo que se guarda en el cronómetro: 24 horas (la regla de Firestore tiene el mismo límite)
+const val MAX_CLOCK_MS = 86_400_000L
 private val SPANISH = Locale.forLanguageTag("es-PE")
 
 // Textos de fecha y hora (siempre en la zona del teléfono)

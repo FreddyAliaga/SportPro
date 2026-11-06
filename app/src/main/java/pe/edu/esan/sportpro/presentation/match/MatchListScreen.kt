@@ -28,11 +28,14 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import pe.edu.esan.sportpro.data.model.Match
 import pe.edu.esan.sportpro.data.model.MatchStatus
+import pe.edu.esan.sportpro.data.model.Score
 import pe.edu.esan.sportpro.data.model.toMatchDateText
 import pe.edu.esan.sportpro.data.model.toMatchTimeText
 import pe.edu.esan.sportpro.presentation.components.ErrorBox
@@ -77,8 +80,11 @@ fun MatchListScreen(
         Title("Partidos")
         Spacer(Modifier.height(8.dp))
         Subtitle(
-            if (state.isAdmin) "Partidos de todos los equipos de tu academia. Los gestiona el DT de cada equipo."
-            else "Crea el partido, elige a tus convocados y mira quién confirma."
+            when {
+                state.isAdmin -> "Partidos de todos los equipos de tu academia. Los gestiona el DT de cada equipo."
+                state.isFamily -> "Sigue los partidos en vivo: marcador, minuto y cada jugada al instante."
+                else -> "Crea el partido, elige a tus convocados y mira quién confirma."
+            }
         )
         Spacer(Modifier.height(16.dp))
 
@@ -88,12 +94,14 @@ fun MatchListScreen(
         }
         Messages(state.errorMessage, state.infoMessage)
 
-        if (state.isCoach && state.profile?.teamId.isNullOrEmpty()) {
+        val coachWithoutTeam = state.isCoach && state.profile?.teamId.isNullOrEmpty()
+        if (coachWithoutTeam) {
             InfoBox { Text(MatchViewModel.NO_TEAM_MESSAGE, color = TextoPrincipal, fontWeight = FontWeight.Bold, fontSize = 14.sp) }
-            return@SportProScreen
+            // Puede seguir viendo los partidos donde es operador (US-008)
+            if (state.operatorMatches.isEmpty()) return@SportProScreen
         }
 
-        if (state.isCoach) {
+        if (state.isCoach && !coachWithoutTeam) {
             Spacer(Modifier.height(8.dp))
             PrimaryButton("+ Nuevo partido", onNewMatch)
             Spacer(Modifier.height(12.dp))
@@ -122,13 +130,22 @@ fun MatchListScreen(
         val upcoming = state.upcoming(now)
         val past = state.past(now)
         if (upcoming.isEmpty() && past.isEmpty()) {
-            Subtitle(if (state.isCoach) "Aún no hay partidos. Crea el primero con “+ Nuevo partido”." else "Aún no hay partidos registrados.")
+            Subtitle(
+                when {
+                    state.isCoach -> "Aún no hay partidos. Crea el primero con “+ Nuevo partido”."
+                    state.isFamily && state.familyPlayers.isEmpty() && state.operatorMatches.isEmpty() ->
+                        "Aún no tienes jugadores vinculados en la academia."
+                    else -> "Aún no hay partidos registrados."
+                }
+            )
         }
+        // Se muestra el equipo cuando la lista puede tener varios (ADM, apoderado con hijos en distintos equipos u operador)
+        val showTeam = state.isAdmin || state.allMatches.map { it.teamId }.distinct().size > 1
         if (upcoming.isNotEmpty()) {
-            SectionLabel("Próximos")
+            SectionLabel("Próximos y en curso")
             Spacer(Modifier.height(10.dp))
             upcoming.forEach { match ->
-                MatchCard(match, showTeam = state.isAdmin, onClick = { onOpenMatch(match) })
+                MatchCard(match, showTeam = showTeam, score = state.scores[match.id], onClick = { onOpenMatch(match) })
                 Spacer(Modifier.height(10.dp))
             }
             Spacer(Modifier.height(10.dp))
@@ -137,16 +154,16 @@ fun MatchListScreen(
             SectionLabel("Anteriores y cancelados")
             Spacer(Modifier.height(10.dp))
             past.forEach { match ->
-                MatchCard(match, showTeam = state.isAdmin, onClick = { onOpenMatch(match) })
+                MatchCard(match, showTeam = showTeam, score = state.scores[match.id], onClick = { onOpenMatch(match) })
                 Spacer(Modifier.height(10.dp))
             }
         }
     }
 }
 
-// Tarjeta de un partido: rival, fecha, hora, lugar y estado
+// Tarjeta de un partido: rival, fecha, hora, lugar, estado y (si ya empezó) el marcador (US-010)
 @Composable
-fun MatchCard(match: Match, showTeam: Boolean, onClick: () -> Unit) {
+fun MatchCard(match: Match, showTeam: Boolean, score: Score? = null, onClick: () -> Unit) {
     val faded = match.status == MatchStatus.CANCELLED
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -174,7 +191,21 @@ fun MatchCard(match: Match, showTeam: Boolean, onClick: () -> Unit) {
             Text(match.place, color = TextoSecundario, fontSize = 14.sp)
         }
         Spacer(Modifier.width(8.dp))
-        MatchStatusChip(match.status)
+        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            MatchStatusChip(match.status)
+            if (match.hasLiveData) {
+                val shown = score ?: Score()
+                Text(
+                    "${shown.local} – ${shown.rival}",
+                    fontWeight = FontWeight.Black,
+                    fontSize = 20.sp,
+                    color = TextoPrincipal,
+                    modifier = Modifier.clearAndSetSemantics {
+                        contentDescription = "Marcador: ${match.teamName} ${shown.local}, ${match.rival} ${shown.rival}"
+                    }
+                )
+            }
+        }
     }
 }
 

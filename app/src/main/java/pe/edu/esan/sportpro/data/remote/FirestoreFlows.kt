@@ -1,5 +1,6 @@
 package pe.edu.esan.sportpro.data.remote
 
+import android.util.Log
 import com.google.firebase.firestore.DocumentReference
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.Query
@@ -14,7 +15,11 @@ import kotlinx.coroutines.flow.callbackFlow
 internal fun <T> queryFlow(query: Query, map: (DocumentSnapshot) -> T): Flow<Result<List<T>>> = callbackFlow {
     val registration = query.addSnapshotListener { snapshot, error ->
         when {
-            error != null -> trySend(Result.failure(Exception(FirebaseAuthManager.friendlyMessage(error))))
+            error != null -> {
+                // En Logcat queda el error completo: si Firestore pide un índice, ahí viene el enlace para crearlo
+                Log.w("SportPro", "Error en una consulta de Firestore: ${error.message}")
+                trySend(Result.failure(Exception(FirebaseAuthManager.friendlyMessage(error))))
+            }
             snapshot != null -> trySend(Result.success(snapshot.documents.map(map)))
         }
     }

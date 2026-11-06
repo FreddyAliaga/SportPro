@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import pe.edu.esan.sportpro.data.model.Callup
 import pe.edu.esan.sportpro.data.model.CallupResponse
+import pe.edu.esan.sportpro.data.model.MAX_OPERATORS
 import pe.edu.esan.sportpro.data.model.Match
 import pe.edu.esan.sportpro.data.model.MatchStatus
 import pe.edu.esan.sportpro.data.model.toDeadlineText
@@ -55,6 +56,8 @@ fun MatchDetailScreen(
     viewModel: MatchViewModel,
     onBack: () -> Unit,
     onLineup: () -> Unit,
+    onRecord: () -> Unit,          // US-008: "Registrar partido" (DT del equipo u operador)
+    onWatch: () -> Unit,           // US-010: "Ver en vivo"
     onReschedule: () -> Unit
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -107,6 +110,17 @@ fun MatchDetailScreen(
         Spacer(Modifier.height(16.dp))
         MatchInfoCard(match, state.confirmHours)
 
+        // US-008 (RN-010): solo el DT del equipo y los operadores ven "Registrar partido"
+        if (match.canRecord(state.profile) && match.status != MatchStatus.CANCELLED) {
+            Spacer(Modifier.height(16.dp))
+            PrimaryButton(if (match.isFinished) "Ver registro del partido" else "Registrar partido", onRecord)
+        }
+        // US-010: marcador y cronología en tiempo real
+        if (match.hasLiveData) {
+            Spacer(Modifier.height(12.dp))
+            SecondaryButton(if (match.isLive) "Ver en vivo" else "Ver marcador y cronología", onWatch)
+        }
+
         state.loadError?.let {
             Spacer(Modifier.height(12.dp))
             ErrorBox(it)
@@ -116,6 +130,12 @@ fun MatchDetailScreen(
         if (state.canManageMatch && state.pendingNotice != null) {
             Spacer(Modifier.height(12.dp))
             SecondaryButton("Reintentar avisos", viewModel::retryNotices, enabled = !state.isLoading)
+        }
+        // Corrección US-006: no se pudo confirmar la convocatoria, solo se guardó una parte o fallaron los avisos.
+        // Mientras se vea "Reintentar avisos" no se muestra: al salir y volver, reaparece este botón.
+        if (state.canManageMatch && state.needsCallupCheck && state.pendingNotice == null) {
+            Spacer(Modifier.height(12.dp))
+            SecondaryButton("Comprobar y enviar avisos", viewModel::checkCallupAndNotify, enabled = !state.isLoading)
         }
 
         Spacer(Modifier.height(20.dp))
@@ -240,6 +260,17 @@ fun MatchDetailScreen(
             )
         }
 
+        // US-008 · Operadores del partido (RN-010): el DT los elige; el ADM los ve
+        if (state.canEditOperators) {
+            Spacer(Modifier.height(24.dp))
+            OperatorsSection(state, onToggle = viewModel::toggleOperator, onSave = viewModel::saveOperators)
+        } else if (state.isAdmin && match.operatorIds.isNotEmpty()) {
+            Spacer(Modifier.height(24.dp))
+            SectionLabel("Operadores")
+            Spacer(Modifier.height(10.dp))
+            Text(state.operatorNames.joinToString(" · "), color = TextoPrincipal, fontSize = 15.sp)
+        }
+
         // Reprogramar o cancelar (DT, antes del inicio)
         if (state.canManageMatch && open) {
             Spacer(Modifier.height(24.dp))
@@ -250,6 +281,44 @@ fun MatchDetailScreen(
             SecondaryButton("Cancelar partido", { showCancel = true }, enabled = !state.isLoading)
         }
         Spacer(Modifier.height(12.dp))
+    }
+}
+
+// US-008 · "Operadores": usuarios activos de la academia que pueden registrar el partido junto con el DT (máx. 5)
+@Composable
+private fun OperatorsSection(state: MatchUiState, onToggle: (String) -> Unit, onSave: () -> Unit) {
+    SectionLabel("Operadores")
+    Spacer(Modifier.height(10.dp))
+    Text(
+        "Elige hasta $MAX_OPERATORS personas de tu academia que te ayudarán a registrar el partido en vivo. " +
+            "Solo ellas y tú verán el botón “Registrar partido”.",
+        color = TextoSecundario,
+        style = MaterialTheme.typography.bodyMedium
+    )
+    Spacer(Modifier.height(10.dp))
+    val selected = state.selectedOperators
+    if (state.operatorCandidates.isEmpty()) {
+        Subtitle(
+            if (state.loadErrors["directorio"] != null) "No pudimos cargar a las personas de tu academia."
+            else "Aún no hay otras personas activas en tu academia. Aparecen aquí cuando inician sesión."
+        )
+        return
+    }
+    SportProCard {
+        state.operatorCandidates.forEach { member ->
+            CheckRow(
+                text = member.name,
+                detail = listOfNotNull(member.roleName, if (!member.isActive) "Cuenta desactivada" else null).joinToString(" · "),
+                checked = member.uid in selected,
+                onCheckedChange = { onToggle(member.uid) }
+            )
+        }
+    }
+    Spacer(Modifier.height(8.dp))
+    Text("${selected.size} de $MAX_OPERATORS elegidos", color = TextoSecundario, fontSize = 14.sp)
+    if (state.operatorDraft != null) {
+        Spacer(Modifier.height(12.dp))
+        PrimaryButton("Guardar operadores", onClick = onSave, loading = state.isLoading)
     }
 }
 

@@ -546,7 +546,7 @@ class PlayerViewModel : ViewModel() {
                     isLoading = false,
                     errorMessage = result.exceptionOrNull()?.message,
                     infoMessage = if (result.isSuccess) {
-                        if (active) "${player.name} vuelve a estar activo." else "${player.name} quedó Inactivo. Su historial se conserva."
+                        if (active) "Se reactivó a ${player.name}." else "Se desactivó a ${player.name}. Su historial se conserva."
                     } else null
                 )
             }

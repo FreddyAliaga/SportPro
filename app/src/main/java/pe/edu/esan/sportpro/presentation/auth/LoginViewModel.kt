@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import pe.edu.esan.sportpro.data.model.AccountStatus
 import pe.edu.esan.sportpro.data.model.UserProfile
+import pe.edu.esan.sportpro.data.remote.AcademyRepository
 import pe.edu.esan.sportpro.data.remote.FirebaseAuthManager
 import pe.edu.esan.sportpro.data.remote.SignInOutcome
 
@@ -197,6 +198,9 @@ class LoginViewModel : ViewModel() {
     // actualiza el perfil de la sesión y el inicio y el plantel se actualizan solos.
     private fun watchProfile() {
         sessionClosed = false
+        // US-008: la ficha se publica aquí porque el listener de abajo no avisa si el perfil no cambió
+        // (solo deja pasar lo confirmado por el servidor, y sin cambios el servidor no genera aviso).
+        _uiState.value.profile?.let { publishMemberEntry(it) }
         profileJob?.cancel()
         profileJob = viewModelScope.launch {
             FirebaseAuthManager.currentProfileFlow().collect { profile ->
@@ -207,8 +211,21 @@ class LoginViewModel : ViewModel() {
                         endSession("Tu cuenta está bloqueada. Comunícate con el administrador de tu academia.")
                     profile != _uiState.value.profile -> _uiState.update { it.copy(profile = profile) }
                 }
+                if (profile != null) publishMemberEntry(profile)
             }
         }
+    }
+
+    // US-008: la ficha del directorio de la academia (nombre, rol y estado) se publica al tener el perfil
+    // activo y cada vez que cambian esos datos (por ejemplo, el nombre). Una vez por cambio, no en cada lectura.
+    private var publishedMemberKey = ""
+
+    private fun publishMemberEntry(profile: UserProfile) {
+        if (profile.status != AccountStatus.ACTIVE) return
+        val key = listOf(profile.uid, profile.academyId, profile.name, profile.role, profile.status).joinToString("|")
+        if (key == publishedMemberKey) return
+        publishedMemberKey = key
+        AcademyRepository.publishMyMemberEntry(profile)
     }
 
     // Pide a AppNavGraph cerrar la sesión y explicar el motivo en "Iniciar sesión"
@@ -223,6 +240,7 @@ class LoginViewModel : ViewModel() {
 
     fun signOut() {
         sessionClosed = true
+        publishedMemberKey = ""
         restoreJob?.cancel()
         profileJob?.cancel()
         FirebaseAuthManager.signOut()

@@ -188,7 +188,7 @@ class CatalogViewModel : ViewModel() {
                     isLoading = false,
                     errorMessage = result.exceptionOrNull()?.message,
                     infoMessage = if (result.isSuccess) {
-                        if (active) "${type.name} está activo otra vez." else "${type.name} se desactivó. Los partidos ya registrados no cambian."
+                        if (active) "Se activó otra vez: ${type.name}." else "${type.name} se desactivó. Los partidos ya registrados no cambian."
                     } else null
                 )
             }

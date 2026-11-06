@@ -1,10 +1,12 @@
 package pe.edu.esan.sportpro.data.remote
 
+import android.util.Log
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.DocumentReference
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.Source
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.tasks.await
@@ -15,10 +17,12 @@ import pe.edu.esan.sportpro.data.model.CallupResponse
 import pe.edu.esan.sportpro.data.model.Lineup
 import pe.edu.esan.sportpro.data.model.LineupStarter
 import pe.edu.esan.sportpro.data.model.LineupSubstitute
+import pe.edu.esan.sportpro.data.model.MAX_OPERATORS
 import pe.edu.esan.sportpro.data.model.Match
 import pe.edu.esan.sportpro.data.model.MatchForm
 import pe.edu.esan.sportpro.data.model.MatchStatus
 import pe.edu.esan.sportpro.data.model.Player
+import pe.edu.esan.sportpro.data.model.PublishCallupResult
 import pe.edu.esan.sportpro.data.model.UserProfile
 import pe.edu.esan.sportpro.data.model.matchStartsAt
 
@@ -55,6 +59,11 @@ object MatchRepository {
     // Todos los partidos de la academia (ADM, solo lectura)
     fun academyMatchesFlow(academyId: String): Flow<Result<List<Match>>> =
         queryFlow(matchesRef.whereEqualTo("academyId", academyId)) { it.toMatch() }
+
+    // US-008 · Partidos donde soy operador (para que el operador encuentre el partido aunque no sea de su equipo).
+    // Igualdad + array-contains: Firestore lo resuelve con los índices simples (sin índice compuesto).
+    fun operatorMatchesFlow(academyId: String, uid: String): Flow<Result<List<Match>>> =
+        queryFlow(matchesRef.whereEqualTo("academyId", academyId).whereArrayContains("operatorIds", uid)) { it.toMatch() }
 
     fun matchFlow(matchId: String): Flow<Result<Match>> =
         documentFlow(matchRef(matchId), "No encontramos este partido.") { it.toMatch() }
@@ -122,15 +131,22 @@ object MatchRepository {
     // (así un reintento no borra respuestas ni duplica convocados).
     // Si el partido está "Programado", pasa a "Convocado" en la MISMA transacción del primer lote: nunca queda
     // un partido con convocados pero sin publicar. Con players vacío solo se publica (reintento).
-    // Devuelve los convocados nuevos.
-    suspend fun publishCallup(match: Match, players: List<Player>): Result<List<Callup>> {
-        if (!ConnectionChecker.isOnline()) return ConnectionChecker.noConnection()
-        return try {
-            val created = mutableListOf<Callup>()
-            // Sin jugadores nuevos: un solo "lote" vacío que solo cambia el estado (si sigue "Programado")
-            val chunks = players.chunked(CALLUP_CHUNK).ifEmpty { listOf(emptyList()) }
-            chunks.forEachIndexed { index, chunk ->
-                val added = firestore.runTransaction { transaction ->
+    //
+    // Corrección US-006 (causa probable: reintento tras corte de red; confirmar con el Log): antes de mostrar un
+    // error se pregunta al servidor si el lote quedó guardado. Si no se puede saber, el resultado es Unconfirmed.
+    //
+    // Límites conocidos:
+    // - Un apoderado con dos hijos no recibe un segundo aviso si el segundo hijo se convoca después
+    //   (el ID del aviso es por partido y persona).
+    // - El botón "Comprobar y enviar avisos" se recuerda solo mientras la app sigue abierta. Si se cierra, los avisos
+    //   pendientes salen al agregar a otro jugador.
+    suspend fun publishCallup(match: Match, players: List<Player>): PublishCallupResult {
+        if (!ConnectionChecker.isOnline()) return PublishCallupResult.Failed(FirebaseAuthManager.NO_CONNECTION_MESSAGE)
+        // Sin jugadores nuevos: un solo "lote" vacío que solo cambia el estado (si sigue "Programado")
+        val chunks = players.chunked(CALLUP_CHUNK).ifEmpty { listOf(emptyList()) }
+        chunks.forEachIndexed { index, chunk ->
+            try {
+                firestore.runTransaction { transaction ->
                     // En una transacción primero se lee todo y después se escribe
                     val matchSnapshot = transaction.get(matchRef(match.id))
                     checkOpen(matchSnapshot)
@@ -145,14 +161,8 @@ object MatchRepository {
                             )
                         )
                     }
-                    chunk.zip(existing).filter { !it.second }.map { (player, _) ->
-                        val callup = Callup(
-                            playerId = player.id,
-                            playerName = player.shortName,
-                            isMinor = player.isMinor,
-                            playerUserId = player.userId,
-                            guardianIds = player.guardianIds
-                        )
+                    chunk.zip(existing).filter { !it.second }.forEach { (player, _) ->
+                        val callup = player.toNewCallup()
                         transaction.set(
                             callupsRef(match.id).document(player.id),
                             hashMapOf(
@@ -165,16 +175,102 @@ object MatchRepository {
                                 "createdAt" to FieldValue.serverTimestamp()
                             )
                         )
-                        callup
                     }
                 }.await()
-                created += added
+            } catch (e: Exception) {
+                // El código se lee ANTES de comprobar. En Logcat queda el código real (sin datos personales).
+                val code = firestoreErrorCode(e)
+                Log.w("SportPro", "Falló la transacción de la convocatoria: ${code ?: e.javaClass.simpleName}")
+                // Partido ya empezado o cancelado (checkOpen): solo ese mensaje, sin reintento ni botón de avisos
+                if (e is IllegalStateException || e.cause is IllegalStateException) {
+                    return PublishCallupResult.Failed(friendly(e))
+                }
+                val savedEarlier = index > 0
+                val saved = try {
+                    isCallupChunkSaved(match.id, chunk)
+                } catch (checkError: Exception) {
+                    val checkCode = firestoreErrorCode(checkError)
+                    Log.w("SportPro", "No se pudo comprobar la convocatoria: ${checkCode ?: checkError.javaClass.simpleName}")
+                    return if (checkCode == FirebaseFirestoreException.Code.PERMISSION_DENIED) {
+                        callupFailed(CALLUP_DENIED_MESSAGE, savedEarlier)
+                    } else {
+                        PublishCallupResult.Unconfirmed
+                    }
+                }
+                if (!saved) {
+                    val message = if (code == FirebaseFirestoreException.Code.PERMISSION_DENIED) {
+                        CALLUP_DENIED_MESSAGE
+                    } else {
+                        "${friendly(e)} $CALLUP_RETRY_HINT"
+                    }
+                    return callupFailed(message, savedEarlier)
+                }
             }
-            Result.success(created)
+        }
+        return checkSavedCallup(match.id)
+    }
+
+    // Lee del servidor el partido y sus convocados. Solo es Saved si el partido sigue abierto y quedó "Convocado".
+    suspend fun checkSavedCallup(matchId: String): PublishCallupResult {
+        if (!ConnectionChecker.isOnline()) return PublishCallupResult.Unconfirmed
+        return try {
+            val snapshot = matchRef(matchId).get(Source.SERVER).await()
+            when {
+                !snapshot.exists() || !snapshot.toMatch().isOpen() -> PublishCallupResult.Failed(MATCH_CLOSED_MESSAGE)
+                snapshot.getString("status") != MatchStatus.CALLED ->
+                    PublishCallupResult.Failed("La convocatoria no se guardó. $CALLUP_RETRY_HINT")
+                else -> PublishCallupResult.Saved(
+                    callupsRef(matchId).get(Source.SERVER).await().documents.map { it.toCallup() }
+                )
+            }
         } catch (e: Exception) {
-            Result.failure(Exception(friendly(e)))
+            val code = firestoreErrorCode(e)
+            Log.w("SportPro", "No se pudo leer la convocatoria guardada: ${code ?: e.javaClass.simpleName}")
+            if (code == FirebaseFirestoreException.Code.PERMISSION_DENIED) {
+                PublishCallupResult.Failed(CALLUP_DENIED_MESSAGE)
+            } else {
+                PublishCallupResult.Unconfirmed
+            }
         }
     }
+
+    private fun callupFailed(message: String, savedEarlier: Boolean) = PublishCallupResult.Failed(
+        message = if (savedEarlier) "$message $CALLUP_PARTIAL_HINT" else message,
+        savedEarlier = savedEarlier
+    )
+
+    private fun Player.toNewCallup() = Callup(
+        playerId = id,
+        playerName = shortName,
+        isMinor = isMinor,
+        playerUserId = userId,
+        guardianIds = guardianIds
+    )
+
+    // ¿El lote ya está en el servidor? El partido quedó "Convocado" y existen todos sus convocados
+    private suspend fun isCallupChunkSaved(matchId: String, chunk: List<Player>): Boolean {
+        val status = matchRef(matchId).get(Source.SERVER).await().getString("status")
+        return status == MatchStatus.CALLED &&
+            chunk.all { callupsRef(matchId).document(it.id).get(Source.SERVER).await().exists() }
+    }
+
+    // Código de Firestore del error (a veces viene dentro de otra excepción); null si no es de Firestore
+    private fun firestoreErrorCode(e: Exception): FirebaseFirestoreException.Code? =
+        (e as? FirebaseFirestoreException ?: e.cause as? FirebaseFirestoreException)?.code
+
+    private const val CALLUP_RETRY_HINT = "Puedes volver a intentarlo: no se repiten convocados ni avisos."
+
+    private const val CALLUP_PARTIAL_HINT =
+        "Una parte de la convocatoria sí se guardó: toca \"Comprobar y enviar avisos\" para avisar a esos convocados."
+
+    private const val CALLUP_DENIED_MESSAGE =
+        "No tienes permiso para convocar en este partido. Puede que ya no seas el DT de este equipo, " +
+            "que algún jugador ya no esté activo o haya cambiado de equipo, o que el partido ya haya empezado " +
+            "según el servidor (revisa la hora del teléfono)."
+
+    const val CALLUP_UNCONFIRMED_MESSAGE =
+        "No pudimos confirmar si la convocatoria se guardó. Toca \"Comprobar y enviar avisos\" para revisarlo: " +
+            "no se repiten avisos."
 
     // El partido sigue abierto: "Programado" o "Convocado" y aún no empieza (la regla lo vuelve a revisar)
     private fun checkOpen(snapshot: DocumentSnapshot) {
@@ -250,6 +346,36 @@ object MatchRepository {
         }
     }
 
+    // ---------------------------------------------------------------- Operadores (DT, US-008)
+
+    // "Guardar operadores": hasta 5 usuarios activos de la academia (RN-010). Se puede cambiar mientras el
+    // partido no esté Finalizado ni Cancelado (también en curso, por si un operador se queda sin batería).
+    // Transacción: se hace antes del partido, con conexión, y así se ve el error de inmediato.
+    suspend fun saveOperators(matchId: String, operatorIds: List<String>): Result<Unit> {
+        if (!ConnectionChecker.isOnline()) return ConnectionChecker.noConnection()
+        return try {
+            val ids = operatorIds.distinct()
+            if (ids.size > MAX_OPERATORS) throw IllegalStateException("Puedes elegir como máximo $MAX_OPERATORS operadores.")
+            firestore.runTransaction { transaction ->
+                val snapshot = transaction.get(matchRef(matchId))
+                val status = snapshot.getString("status")
+                if (!snapshot.exists() || status == MatchStatus.FINISHED || status == MatchStatus.CANCELLED) {
+                    throw IllegalStateException("Este partido ya terminó o fue cancelado: ya no se pueden cambiar los operadores.")
+                }
+                transaction.update(matchRef(matchId), mapOf("operatorIds" to ids, "updatedAt" to FieldValue.serverTimestamp()))
+            }.await()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            // La regla rechaza si alguien ya no está activo o no es de la academia, o si dejaste de ser el DT del equipo
+            val denied = firestoreErrorCode(e) == FirebaseFirestoreException.Code.PERMISSION_DENIED
+            Result.failure(Exception(if (denied) OPERATORS_DENIED_MESSAGE else friendly(e)))
+        }
+    }
+
+    const val OPERATORS_DENIED_MESSAGE =
+        "No pudimos guardar los operadores: alguna persona elegida ya no tiene su cuenta activa en la academia, " +
+            "o ya no eres el DT de este equipo. Revisa la lista y vuelve a intentarlo."
+
     // ---------------------------------------------------------------- Responder (apoderado o jugador mayor)
 
     // "Confirmo" o "No puedo" (con motivo opcional). En la misma operación se guarda el motivo APARTE,
@@ -314,7 +440,15 @@ object MatchRepository {
         place = getString("place") ?: "",
         status = getString("status") ?: MatchStatus.PROGRAMMED,
         createdBy = getString("createdBy") ?: "",
-        callupPublishedAt = time("callupPublishedAt")
+        callupPublishedAt = time("callupPublishedAt"),
+        operatorIds = (get("operatorIds") as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
+        clockRunning = getBoolean("clockRunning") ?: false,
+        clockRunningSince = time("clockRunningSince"),
+        clockElapsedMs = getLong("clockElapsedMs") ?: 0L,
+        startedAt = time("startedAt"),
+        finishedAt = time("finishedAt"),
+        startEventId = getString("startEventId") ?: "",
+        endEventId = getString("endEventId") ?: ""
     )
 
     private fun DocumentSnapshot.toCallup() = Callup(

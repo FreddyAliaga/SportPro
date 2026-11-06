@@ -2,6 +2,7 @@
 
 App Android de gestión de academias de fútbol. Proyecto del curso **Desarrollo de Soluciones Móviles – ESAN 2026-02** (docente: Luis Chang).
 Responsable de este repositorio: **Freddy Aliaga** (FreddyAliaga). Equipo: Leopoldo (krackdian), Osmar (deigu0), Orlando (JavierYuen1).
+**Solo Freddy sube cambios a este repositorio** (los compañeros ya no son colaboradores).
 
 ## Cómo trabajar con Freddy
 - Freddy está aprendiendo Android y Git. **Responde en español, con palabras simples y paso a paso.**
@@ -24,6 +25,14 @@ Responsable de este repositorio: **Freddy Aliaga** (FreddyAliaga). Equipo: Leopo
 - `presentation/navigation` → `AppNavGraph` con rutas string (estilo del profesor) y Navigation Drawer para pantallas con sesión
 - `ui/theme` → colores y tipografía
 - **No** lanzar corrutinas con `CoroutineScope(Dispatchers.Main)` dentro de composables: usar el ViewModel.
+- Excepciones acordadas (US-008), escritas con `set()`/`WriteBatch` **sin esperar al servidor** (sin `await()`):
+  - Los **eventos** del partido (sin transacción ni `ConnectionChecker`) para que funcionen sin conexión. Toda lectura y
+    escritura de eventos pasa por `data/remote/MatchEventRepository.kt`.
+  - El **cronómetro** (iniciar, pausar, reanudar, finalizar) va en el mismo repositorio, pero **sí exige conexión**
+    (`ConnectionChecker`), porque la regla lo compara con la hora del servidor.
+  - `AcademyRepository.publishMyMemberEntry`: cada usuario activo publica su ficha del directorio
+    `academies/{id}/members/{uid}` (nombre, rol y estado) al iniciar sesión; si no hay conexión se envía después.
+- El marcador (`scoreOf`) y el minuto (`Match.currentMinute`) están en `data/model` para que los usen US-009 y US-011.
 
 ## Firebase: SOLO plan gratuito (Spark) – restricción del profesor
 - Proyecto `sportpro-841f9`. Firestore en `southamerica-east1`, **modo producción** con reglas en `firestore.rules` (se publican desde la consola).
@@ -47,7 +56,8 @@ Responsable de este repositorio: **Freddy Aliaga** (FreddyAliaga). Equipo: Leopo
 - Usar los componentes de `presentation/components` en lugar de crear estilos nuevos.
 
 ## Git
-- Una rama por historia: `feature/US-XXX-descripcion`. Pull Request hacia `main`, revisado por otro integrante.
+- Una rama por historia: `feature/US-XXX-descripcion`. Pull Request hacia `main`; solo Freddy sube y une los cambios.
+- Después de unir un Pull Request, **su rama se borra** (en GitHub y en local).
 - Mensajes de commit en español, claros: "US-001: valida código de invitación".
 - No subir `.idea/`, `local.properties` ni claves. `google-services.json` sí va en el repo (como hace el profesor).
 
@@ -60,11 +70,17 @@ Están como issues #1 a #16 en el GitHub Project **"SportPro – Historias de Us
 - La US-002 (partiendo del trabajo de Leopoldo) y la US-003 las desarrolla Freddy (acordado en octubre 2026).
 - Osmar: US-004 Mensualidades · US-006 Convocatoria y alineación · US-011 Estadísticas · US-014 Avisos de pruebas.
 
-## Datos de prueba en Firestore (`invitations`)
-- Los códigos se crean desde la app: los de DT, el ADM en "Usuarios e invitaciones" (US-002); los PAD/JUG, el DT o el ADM
-  en el perfil del jugador ("Nuevo jugador" → "Invitar apoderado" / "Invitar jugador", US-003).
-- `HALC-7K2P` (creado a mano antes de la US-003) **ya no sirve**: apunta a un jugador que no existe en `players`.
+### Estado de las historias (noviembre 2026)
+- **Hechas:** US-001, US-002, US-003, US-006, US-007, base de US-012 (bandeja de notificaciones en la app),
+  US-008 (registro en vivo, operadores, sin conexión) y US-010 (marcador y cronología en tiempo real).
+- **Pendientes:** US-004, US-005, US-009, US-011, US-012 (anuncios), US-013, US-014, US-015, US-016.
+
+## Datos de prueba en Firestore
+- Los códigos de invitación se crean desde la app: los de DT, el ADM en "Usuarios e invitaciones" (US-002); los PAD/JUG,
+  el DT o el ADM en el perfil del jugador ("Nuevo jugador" → "Invitar apoderado" / "Invitar jugador", US-003).
 - Campos de un código: academyId, academyName, teamId, teamName, city, role, playerId?, playerName?, invitedByName, used, usedBy?, usedAt?, expiresAt?, status? ("ANULADO" lo invalida).
+- Directorio `academies/{id}/members/{uid}` (US-008): cada usuario aparece al iniciar sesión con la app actual;
+  solo guarda nombre, rol y estado.
 
 ## Agente revisor
 Si te piden **revisar**, no edites archivos: compara la rama con `main` (`git diff main...HEAD`) y entrega una lista de problemas ordenada de más grave a menos grave, revisando criterios de aceptación de la historia, privacidad, reglas de Firestore, estilo del profesor (versiones, carpetas, MVVM), manejo de errores y textos en español.

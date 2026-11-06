@@ -81,7 +81,7 @@ fun EventTypeFormScreen(
         ConfirmDialog(
             title = "¿Desactivar ${editing.name}?",
             text = "Ya no se podrá elegir en los partidos. No se borra: los eventos ya registrados se conservan " +
-                "tal como están y puedes reactivarlo cuando quieras.",
+                "tal como están y se puede volver a activar cuando quieras.",
             confirmText = "Desactivar",
             onDismiss = { showDeactivate = false },
             onConfirm = {
@@ -184,7 +184,7 @@ fun EventTypeFormScreen(
             HorizontalDivider(color = BordeSuave)
             SwitchRow(
                 "Requiere jugador",
-                "Hay que elegir al jugador del evento.",
+                "Si no se identifica, el evento queda como “Pendiente de identificar”.",
                 checked = form.requiresPlayer,
                 onCheckedChange = { viewModel.onFormChange(form.copy(requiresPlayer = it)) },
                 enabled = !locked

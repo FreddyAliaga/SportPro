@@ -5,12 +5,13 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.produceState
 import kotlinx.coroutines.delay
 
-// Hora actual que se renueva cada 30 segundos, para que los plazos ("Responde hasta…") y el inicio
-// del partido se vean al día sin salir de la pantalla. Es solo un reloj de la interfaz: no lee datos.
+// Hora actual que se renueva cada intervalMs (30 segundos por defecto), para que los plazos ("Responde hasta…")
+// y el inicio del partido se vean al día sin salir de la pantalla. El cronómetro del partido (US-008 y US-010)
+// usa 1 segundo. Es solo un reloj de la interfaz: no lee datos.
 @Composable
-fun rememberNow(): State<Long> = produceState(System.currentTimeMillis()) {
+fun rememberNow(intervalMs: Long = 30_000): State<Long> = produceState(System.currentTimeMillis(), intervalMs) {
     while (true) {
-        delay(30_000)
         value = System.currentTimeMillis()
+        delay(intervalMs)
     }
 }

@@ -1,5 +1,6 @@
 package pe.edu.esan.sportpro.data.remote
 
+import android.util.Log
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.DocumentReference
 import com.google.firebase.firestore.DocumentSnapshot
@@ -17,6 +18,7 @@ import pe.edu.esan.sportpro.data.model.ACADEMY_ARTICLE_WORDS
 import pe.edu.esan.sportpro.data.model.ACADEMY_TYPE_WORDS
 import pe.edu.esan.sportpro.data.model.AccountStatus
 import pe.edu.esan.sportpro.data.model.Academy
+import pe.edu.esan.sportpro.data.model.AcademyMember
 import pe.edu.esan.sportpro.data.model.DEFAULT_CALLUP_CONFIRM_HOURS
 import pe.edu.esan.sportpro.data.model.DEFAULT_CALLUP_NOTICE_HOURS
 import pe.edu.esan.sportpro.data.model.DtInvitation
@@ -354,15 +356,55 @@ object AcademyRepository {
         return try {
             firestore.runTransaction { transaction ->
                 val ref = userRef(user.uid)
-                transaction.update(ref, "status", if (active) AccountStatus.ACTIVE else AccountStatus.INACTIVE)
+                // US-008: el directorio copia nombre y rol del perfil REAL (la regla lo compara)
+                val current = transaction.get(ref)
+                val status = if (active) AccountStatus.ACTIVE else AccountStatus.INACTIVE
+                transaction.update(ref, "status", status)
                 if (!active && user.role == "DT" && user.teamId.isNotEmpty()) {
                     transaction.update(ref, "teamId", "")
                 }
+                // US-008: el directorio de la academia queda al día en la MISMA operación
+                transaction.set(
+                    memberRef(user.academyId, user.uid),
+                    memberData(current.getString("name") ?: "", current.getString("role") ?: "", status)
+                )
             }.await()
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(Exception(FirebaseAuthManager.friendlyMessage(e)))
         }
+    }
+
+    // ---------------------------------------------------------------- Directorio de la academia (US-008)
+    // academies/{academyId}/members/{uid}: solo nombre, rol y estado (nunca correo, celular ni fecha de nacimiento).
+
+    private fun memberRef(academyId: String, uid: String) = academyRef(academyId).collection("members").document(uid)
+
+    private fun memberData(name: String, role: String, status: String): Map<String, Any> = mapOf(
+        "name" to name,
+        "role" to role,
+        "status" to status,
+        "updatedAt" to FieldValue.serverTimestamp()
+    )
+
+    // El DT lo usa para elegir a los operadores del partido (las reglas solo dejan leerlo al DT y al ADM)
+    fun directoryFlow(academyId: String): Flow<Result<List<AcademyMember>>> =
+        queryFlow(academyRef(academyId).collection("members")) {
+            AcademyMember(
+                uid = it.id,
+                name = it.getString("name") ?: "",
+                role = it.getString("role") ?: "",
+                status = it.getString("status") ?: ""
+            )
+        }
+
+    // Cada usuario ACTIVO escribe su propia ficha al iniciar sesión, con el nombre y el rol de su perfil
+    // (así el nombre queda al día si cambia). No espera al servidor: sin internet se envía al reconectar.
+    // Si falla no pasa nada grave: solo no aparecerá como posible operador hasta el próximo inicio de sesión.
+    fun publishMyMemberEntry(profile: UserProfile) {
+        if (profile.status != AccountStatus.ACTIVE || profile.academyId.isEmpty() || profile.uid.isEmpty()) return
+        memberRef(profile.academyId, profile.uid).set(memberData(profile.name, profile.role, profile.status))
+            .addOnFailureListener { Log.w("SportPro", "No se pudo publicar la ficha del directorio", it) }
     }
 
     // ---------------------------------------------------------------- Invitaciones de DT

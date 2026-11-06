@@ -41,6 +41,9 @@ import pe.edu.esan.sportpro.presentation.callup.CallupsScreen
 import pe.edu.esan.sportpro.presentation.notification.NotificationViewModel
 import pe.edu.esan.sportpro.presentation.notification.NotificationsScreen
 import pe.edu.esan.sportpro.presentation.match.LineupScreen
+import pe.edu.esan.sportpro.presentation.match.LiveMatchScreen
+import pe.edu.esan.sportpro.presentation.match.LiveMatchViewModel
+import pe.edu.esan.sportpro.presentation.match.WatchMatchScreen
 import pe.edu.esan.sportpro.presentation.match.MatchDetailScreen
 import pe.edu.esan.sportpro.presentation.match.MatchFormScreen
 import pe.edu.esan.sportpro.presentation.match.MatchListScreen
@@ -78,6 +81,8 @@ fun AppNavGraph() {
     // US-006: partidos y convocatoria (DT y ADM) / convocatorias (PAD y JUG)
     val matchViewModel: MatchViewModel = viewModel()
     val callupViewModel: CallupViewModel = viewModel()
+    // US-008 / US-010: partido en vivo (registro del DT y operadores; vista en vivo de todos)
+    val liveMatchViewModel: LiveMatchViewModel = viewModel()
     // Base de la US-012: bandeja de notificaciones dentro de la app (todos los roles)
     val notificationViewModel: NotificationViewModel = viewModel()
 
@@ -88,6 +93,7 @@ fun AppNavGraph() {
         catalogViewModel.stop()
         matchViewModel.stop()
         callupViewModel.stop()
+        liveMatchViewModel.stop()
         loginViewModel.signOut()
         registerViewModel.signOutAndReset()
     }
@@ -239,10 +245,8 @@ fun AppNavGraph() {
                         "catalogo" -> navController.navigate("catalog")              // US-007 (ADM)
                         "convocatorias" -> navController.navigate("callups")         // US-006 (PAD y JUG)
                         "notificaciones" -> navController.navigate("notifications")  // base de la US-012 (todos)
-                        // US-006: "Partidos" del DT y del ADM. El del PAD/JUG es de la US-010.
-                        "partidos" ->
-                            if (state.profile?.role in listOf("DT", "ADM")) navController.navigate("matches")
-                            else navController.navigate("section/partidos")
+                        // US-006 / US-010: "Partidos" de todos los roles (DT y ADM gestionan; PAD y JUG siguen en vivo)
+                        "partidos" -> navController.navigate("matches")
                         else -> navController.navigate("section/${section.id}")
                     }
                 },
@@ -521,7 +525,11 @@ fun AppNavGraph() {
                     matchViewModel.startNewMatch()
                     navController.navigate("match_new")
                 },
-                onOpenMatch = { match -> navController.navigate("match/${match.id}") },
+                // El DT de su equipo y el ADM abren el detalle; los demás (PAD, JUG u operador de otro equipo), "En vivo"
+                onOpenMatch = { match ->
+                    if (matchViewModel.uiState.value.opensDetail(match)) navController.navigate("match/${match.id}")
+                    else navController.navigate("match/${match.id}/watch")
+                },
                 onOpenCatalog = { navController.navigate("catalog") }   // US-007: el DT lo ve en solo lectura
             )
         }
@@ -553,6 +561,8 @@ fun AppNavGraph() {
                 viewModel = matchViewModel,
                 onBack = back,
                 onLineup = { navController.navigate("match/$matchId/lineup") },
+                onRecord = { navController.navigate("match/$matchId/live") },   // US-008
+                onWatch = { navController.navigate("match/$matchId/watch") },   // US-010
                 onReschedule = {
                     matchViewModel.startReschedule()
                     navController.navigate("match/$matchId/edit")
@@ -597,6 +607,36 @@ fun AppNavGraph() {
                 onBack = back,
                 onSubmit = { matchViewModel.saveReschedule { navController.popBackStack() } },
                 rivalEditable = false
+            )
+        }
+
+        // ---------- US-008 · Registrar partido (solo el DT del equipo y los operadores) ----------
+        // El id en la ruta sirve para volver a cargar el partido si Android cerró la app
+        composable("match/{matchId}/live") { backStackEntry ->
+            val matchId = backStackEntry.arguments?.getString("matchId").orEmpty()
+            val profile = loginViewModel.uiState.collectAsState().value.profile
+            LaunchedEffect(matchId, profile) {
+                if (profile != null) liveMatchViewModel.select(matchId, profile) else loginViewModel.ensureProfile()
+            }
+            val back = backClearingMessages(navController) {
+                liveMatchViewModel.clearMessages()
+                liveMatchViewModel.cancelDraft()
+            }
+            LiveMatchScreen(viewModel = liveMatchViewModel, onBack = back)
+        }
+
+        // ---------- US-010 · Vista "En vivo" (todos los miembros de la academia) ----------
+        composable("match/{matchId}/watch") { backStackEntry ->
+            val matchId = backStackEntry.arguments?.getString("matchId").orEmpty()
+            val profile = loginViewModel.uiState.collectAsState().value.profile
+            LaunchedEffect(matchId, profile) {
+                if (profile != null) liveMatchViewModel.select(matchId, profile) else loginViewModel.ensureProfile()
+            }
+            val back = backClearingMessages(navController, liveMatchViewModel::clearMessages)
+            WatchMatchScreen(
+                viewModel = liveMatchViewModel,
+                onBack = back,
+                onRecord = { navController.navigate("match/$matchId/live") }
             )
         }
 

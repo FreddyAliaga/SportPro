@@ -7,9 +7,12 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import pe.edu.esan.sportpro.data.model.Academy
+import pe.edu.esan.sportpro.data.model.AcademyMember
 import pe.edu.esan.sportpro.data.model.Callup
 import pe.edu.esan.sportpro.data.model.CallupResponse
 import pe.edu.esan.sportpro.data.model.DEFAULT_CALLUP_CONFIRM_HOURS
@@ -18,14 +21,18 @@ import pe.edu.esan.sportpro.data.model.Lineup
 import pe.edu.esan.sportpro.data.model.LineupSlot
 import pe.edu.esan.sportpro.data.model.LineupStarter
 import pe.edu.esan.sportpro.data.model.LineupSubstitute
+import pe.edu.esan.sportpro.data.model.MAX_OPERATORS
 import pe.edu.esan.sportpro.data.model.Match
 import pe.edu.esan.sportpro.data.model.MatchForm
 import pe.edu.esan.sportpro.data.model.MatchFormErrors
 import pe.edu.esan.sportpro.data.model.MatchStatus
 import pe.edu.esan.sportpro.data.model.NoticeRecipient
 import pe.edu.esan.sportpro.data.model.NotificationDraft
+import pe.edu.esan.sportpro.data.model.NotificationType
 import pe.edu.esan.sportpro.data.model.PLAYER_POSITIONS
 import pe.edu.esan.sportpro.data.model.Player
+import pe.edu.esan.sportpro.data.model.PublishCallupResult
+import pe.edu.esan.sportpro.data.model.Score
 import pe.edu.esan.sportpro.data.model.Team
 import pe.edu.esan.sportpro.data.model.UserProfile
 import pe.edu.esan.sportpro.data.model.categoryOrder
@@ -34,10 +41,12 @@ import pe.edu.esan.sportpro.data.model.matchRescheduledNotice
 import pe.edu.esan.sportpro.data.model.matchStartsAt
 import pe.edu.esan.sportpro.data.model.newCallupNotice
 import pe.edu.esan.sportpro.data.model.recipientsOf
+import pe.edu.esan.sportpro.data.model.scoreOf
 import pe.edu.esan.sportpro.data.model.toForm
 import pe.edu.esan.sportpro.data.model.validateLineup
 import pe.edu.esan.sportpro.data.model.validateMatchForm
 import pe.edu.esan.sportpro.data.remote.AcademyRepository
+import pe.edu.esan.sportpro.data.remote.MatchEventRepository
 import pe.edu.esan.sportpro.data.remote.MatchRepository
 import pe.edu.esan.sportpro.data.remote.NotificationRepository
 import pe.edu.esan.sportpro.data.remote.PlayerRepository
@@ -72,6 +81,20 @@ data class MatchUiState(
     val lineupErrors: List<String> = emptyList(),
     // Avisos que no se pudieron enviar (botón "Reintentar avisos")
     val pendingNotice: PendingNotice? = null,
+    // Corrección US-006: partidos cuya convocatoria falta comprobar (botón "Comprobar y enviar avisos").
+    // No se limpia al cambiar de partido: así el botón sigue ahí al volver a este.
+    val callupsToCheck: Set<String> = emptySet(),
+    // US-008 · Operadores: directorio de la academia (solo DT y ADM) y lo que el DT va marcando
+    val directory: List<AcademyMember> = emptyList(),
+    val operatorDraft: Set<String>? = null,        // null = sin cambios (se muestran los guardados)
+    // US-010 · "Partidos" del apoderado (equipos de sus jugadores) y del jugador mayor (su equipo)
+    val familyPlayers: List<Player> = emptyList(),
+    val familyPlayersLoaded: Boolean = false,
+    val teamMatches: Map<String, List<Match>> = emptyMap(),   // teamId -> partidos
+    // US-008 · Partidos donde soy operador (pueden ser de otro equipo)
+    val operatorMatches: List<Match> = emptyList(),
+    // US-010 · Marcador de cada partido empezado (RN-012: calculado en el teléfono con sus eventos)
+    val scores: Map<String, Score> = emptyMap(),
     // Nuevo partido / reprogramar
     val form: MatchForm = MatchForm(),
     val formErrors: MatchFormErrors = MatchFormErrors(),
@@ -83,8 +106,19 @@ data class MatchUiState(
 ) {
     val loadError: String? get() = loadErrors.values.firstOrNull()
 
+    val needsCallupCheck: Boolean get() = selectedMatchId in callupsToCheck
+
     val isCoach: Boolean get() = profile?.role == "DT"
     val isAdmin: Boolean get() = profile?.role == "ADM"
+    val isFamily: Boolean get() = profile?.role in listOf("PAD", "JUG")
+
+    // Todos los partidos que esta persona puede ver en su lista (sin repetir)
+    val allMatches: List<Match>
+        get() = (matches + teamMatches.values.flatten() + operatorMatches).distinctBy { it.id }
+
+    // ¿Se abre el detalle (DT de su equipo y ADM) o la vista "En vivo" (los demás)?
+    fun opensDetail(match: Match): Boolean =
+        isAdmin || (isCoach && match.teamId == profile?.teamId)
 
     // El DT gestiona solo los partidos de SU equipo (las reglas lo vuelven a revisar)
     val canManageMatch: Boolean
@@ -100,7 +134,7 @@ data class MatchUiState(
         get() = teams.sortedWith(compareBy({ !it.active }, { categoryOrder(it.category) }, { it.name.lowercase() }))
 
     private val visibleMatches: List<Match>
-        get() = matches.filter { teamFilter == null || it.teamId == teamFilter }
+        get() = allMatches.filter { teamFilter == null || it.teamId == teamFilter }
 
     // Próximos: sin empezar (programados o convocados) y los que están en curso; el más cercano primero
     fun upcoming(now: Long): List<Match> =
@@ -135,6 +169,24 @@ data class MatchUiState(
     // Nombre completo del plantel si el DT lo tiene; si no, el nombre corto del convocado
     fun playerName(playerId: String, fallback: String): String =
         roster.firstOrNull { it.id == playerId }?.name ?: fallback
+
+    // ---------- Operadores (US-008) ----------
+    // Se pueden cambiar mientras el partido no esté Finalizado ni Cancelado
+    val canEditOperators: Boolean
+        get() = canManageMatch && match?.status !in listOf(MatchStatus.FINISHED, MatchStatus.CANCELLED)
+
+    val selectedOperators: Set<String>
+        get() = operatorDraft ?: match?.operatorIds.orEmpty().toSet()
+
+    // Posibles operadores: usuarios ACTIVOS de la academia, menos el propio DT (él ya registra).
+    // También se muestran los ya elegidos aunque hoy estén inactivos, para poder quitarlos.
+    val operatorCandidates: List<AcademyMember>
+        get() = directory.filter { (it.isActive && it.uid != profile?.uid) || it.uid in selectedOperators }
+            .sortedWith(compareBy({ listOf("DT", "ADM", "JUG", "PAD").indexOf(it.role) }, { it.name.lowercase() }))
+
+    // Nombres de los operadores guardados (para mostrarlos al ADM o con los datos del directorio)
+    val operatorNames: List<String>
+        get() = match?.operatorIds.orEmpty().map { id -> directory.firstOrNull { it.uid == id }?.name ?: "Usuario de la academia" }
 
     // ---------- Alineación ----------
     val matchTeam: Team? get() = teams.firstOrNull { it.id == match?.teamId }
@@ -176,10 +228,12 @@ class MatchViewModel : ViewModel() {
     private var detailJobs: List<Job> = emptyList()
     private var startedKey = ""   // uid + equipo con el que se escucha (al DT le pueden cambiar el equipo)
 
-    // ---------- Inicio: según el rol del perfil con sesión (DT: su equipo; ADM: toda la academia) ----------
+    // ---------- Inicio: según el rol del perfil con sesión ----------
+    // DT: su equipo · ADM: toda la academia · PAD: los equipos de sus jugadores · JUG: su equipo (US-010).
+    // Todos: además, los partidos donde son operadores (US-008).
     fun start(profile: UserProfile) {
-        if (profile.role !in listOf("DT", "ADM") || profile.academyId.isEmpty()) return
-        val key = "${profile.uid}/${profile.teamId}"
+        if (profile.role !in listOf("DT", "ADM", "PAD", "JUG") || profile.academyId.isEmpty()) return
+        val key = "${profile.uid}/${profile.role}/${profile.teamId}"
         if (key == startedKey && baseJobs.isNotEmpty()) {
             _uiState.update { it.copy(profile = profile) }
             return
@@ -190,9 +244,18 @@ class MatchViewModel : ViewModel() {
         val academyId = profile.academyId
         val jobs = mutableListOf(
             listen("academia", AcademyRepository.academyFlow(academyId)) { state, academy -> state.copy(academy = academy) },
-            listen("equipos", AcademyRepository.teamsFlow(academyId)) { state, teams -> state.copy(teams = teams) }
+            listen("equipos", AcademyRepository.teamsFlow(academyId)) { state, teams -> state.copy(teams = teams) },
+            listen("operador", MatchRepository.operatorMatchesFlow(academyId, profile.uid)) { state, matches ->
+                state.copy(operatorMatches = matches)
+            }
         )
-        if (profile.role == "ADM") {
+        // US-008: directorio (nombre, rol y estado) para elegir y mostrar a los operadores (solo DT y ADM pueden leerlo)
+        if (profile.role in listOf("DT", "ADM")) {
+            jobs += listen("directorio", AcademyRepository.directoryFlow(academyId)) { state, members -> state.copy(directory = members) }
+        }
+        if (profile.role in listOf("PAD", "JUG")) {
+            jobs += listenFamilyPlayers(profile)
+        } else if (profile.role == "ADM") {
             jobs += listen("partidos", MatchRepository.academyMatchesFlow(academyId)) { state, matches ->
                 state.copy(matches = matches, matchesLoaded = true)
             }
@@ -214,12 +277,17 @@ class MatchViewModel : ViewModel() {
     fun stop() {
         baseJobs.forEach { it.cancel() }
         baseJobs = emptyList()
+        teamJobs.values.forEach { it.cancel() }
+        teamJobs.clear()
+        scoreJobs.values.forEach { it.cancel() }
+        scoreJobs.clear()
         clearMatch()
         startedKey = ""
         _uiState.value = MatchUiState()
     }
 
-    // Escucha una fuente; su error se guarda (o se quita) solo con su propia clave
+    // Escucha una fuente; su error se guarda (o se quita) solo con su propia clave.
+    // Cuando cambian los partidos, se revisa qué marcadores escuchar.
     private fun <T> listen(source: String, flow: Flow<Result<T>>, onData: (MatchUiState, T) -> MatchUiState): Job =
         viewModelScope.launch {
             flow.collect { result ->
@@ -231,8 +299,86 @@ class MatchViewModel : ViewModel() {
                         }
                     )
                 }
+                if (source == "partidos" || source == "operador") syncScores()
             }
         }
+
+    // ---------- US-010 · Partidos del apoderado (sus jugadores) y del jugador mayor (su equipo) ----------
+    private val teamJobs = mutableMapOf<String, Job>()      // teamId -> partidos del equipo
+
+    private fun listenFamilyPlayers(profile: UserProfile): Job = viewModelScope.launch {
+        val flow: Flow<Result<List<Player>>> = when {
+            profile.role == "PAD" -> PlayerRepository.guardianPlayersFlow(profile.uid)
+            profile.playerId.isNotEmpty() -> PlayerRepository.playerFlow(profile.playerId).map { r -> r.map { listOf(it) } }
+            else -> flowOf(Result.success(emptyList()))
+        }
+        flow.collect { result ->
+            _uiState.update { state ->
+                result.fold(
+                    onSuccess = { players ->
+                        state.copy(familyPlayers = players.filter { it.active }, familyPlayersLoaded = true, loadErrors = state.loadErrors - "jugadores")
+                    },
+                    onFailure = { state.copy(loadErrors = state.loadErrors + ("jugadores" to (it.message ?: "No se pudo cargar la información."))) }
+                )
+            }
+            syncFamilyTeams()
+        }
+    }
+
+    // Un hijo puede estar en otro equipo: se escuchan los partidos de cada equipo (dos filtros de igualdad)
+    private fun syncFamilyTeams() {
+        val state = _uiState.value
+        val academyId = state.profile?.academyId ?: return
+        val teamIds = state.familyPlayers.map { it.teamId }.filter { it.isNotEmpty() }.toSet()
+        (teamJobs.keys - teamIds).forEach { teamId ->
+            teamJobs.remove(teamId)?.cancel()
+            _uiState.update { it.copy(teamMatches = it.teamMatches - teamId) }
+        }
+        (teamIds - teamJobs.keys).forEach { teamId ->
+            teamJobs[teamId] = viewModelScope.launch {
+                MatchRepository.teamMatchesFlow(academyId, teamId).collect { result ->
+                    _uiState.update { s ->
+                        result.fold(
+                            onSuccess = { s.copy(teamMatches = s.teamMatches + (teamId to it), loadErrors = s.loadErrors - "partidos") },
+                            onFailure = { s.copy(loadErrors = s.loadErrors + ("partidos" to (it.message ?: "No se pudo cargar la información."))) }
+                        )
+                    }
+                    updateFamilyLoaded()
+                    syncScores()
+                }
+            }
+        }
+        updateFamilyLoaded()
+    }
+
+    // La lista ya se puede mostrar: llegaron los jugadores y los partidos de todos sus equipos
+    private fun updateFamilyLoaded() {
+        _uiState.update { s ->
+            val teams = s.familyPlayers.map { it.teamId }.filter { it.isNotEmpty() }.toSet()
+            s.copy(matchesLoaded = s.familyPlayersLoaded && teams.all { it in s.teamMatches })
+        }
+    }
+
+    // ---------- US-010 · Marcador en la lista: eventos de cada partido empezado ----------
+    // Se escuchan los partidos en curso y los finalizados de los últimos 30 días (para no abrir demasiados listeners).
+    private val scoreJobs = mutableMapOf<String, Job>()     // matchId -> eventos
+
+    private fun syncScores() {
+        val since = System.currentTimeMillis() - SCORE_DAYS * 24L * 60 * 60 * 1000
+        val wanted = _uiState.value.allMatches
+            .filter { it.isLive || (it.isFinished && (it.startsAt?.time ?: 0L) >= since) }
+            .map { it.id }.toSet()
+        (scoreJobs.keys - wanted).forEach { scoreJobs.remove(it)?.cancel() }
+        (wanted - scoreJobs.keys).forEach { matchId ->
+            scoreJobs[matchId] = viewModelScope.launch {
+                MatchEventRepository.eventsFlow(matchId).collect { result ->
+                    result.getOrNull()?.let { events ->
+                        _uiState.update { it.copy(scores = it.scores + (matchId to scoreOf(events))) }
+                    }
+                }
+            }
+        }
+    }
 
     fun clearMessages() {
         _uiState.update { it.copy(errorMessage = null, infoMessage = null) }
@@ -285,6 +431,7 @@ class MatchViewModel : ViewModel() {
                 lineupDraftMatchId = "",
                 lineupErrors = emptyList(),
                 pendingNotice = null,
+                operatorDraft = null,
                 loadErrors = it.loadErrors - "partido" - "convocados" - "motivos" - "alineación"
             )
         }
@@ -366,27 +513,86 @@ class MatchViewModel : ViewModel() {
         }
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, confirmShortNotice = false, errorMessage = null, infoMessage = null) }
-            val result = MatchRepository.publishCallup(match, players)
-            // "Tienes una nueva convocatoria" a TODOS los convocados que aún no tengan su aviso
-            // (los que ya lo tienen se saltan: el ID del aviso es fijo)
-            val noticeError = result.getOrNull()?.let { created ->
-                val allCallups = (state.callups + created).distinctBy { it.playerId }
-                notify(recipientsOf(allCallups), newCallupNotice(match))
-            }
-            _uiState.update {
-                it.copy(
-                    isLoading = false,
-                    selection = if (result.isSuccess) emptySet() else it.selection,
-                    errorMessage = result.exceptionOrNull()?.let { e ->
-                        "${e.message} Puedes volver a intentarlo: no se repiten convocados ni avisos."
-                    } ?: noticeError,
-                    infoMessage = when {
-                        result.isFailure -> null
-                        firstTime -> "¡Convocatoria publicada! Aquí verás las respuestas en tiempo real."
-                        players.size == 1 -> "Agregamos a ${players.first().name} a la convocatoria."
-                        else -> "Agregamos ${players.size} jugadores a la convocatoria."
+            when (val result = MatchRepository.publishCallup(match, players)) {
+                is PublishCallupResult.Saved -> {
+                    // "Tienes una nueva convocatoria" a TODOS los convocados guardados en el servidor que aún no
+                    // tengan su aviso (los que ya lo tienen se saltan: el ID del aviso es fijo)
+                    val noticeError = notify(recipientsOf(result.callups), newCallupNotice(match))
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            selection = emptySet(),
+                            // Si el envío falló, sigue por comprobar: clearMatch borra el aviso pendiente al salir
+                            callupsToCheck = if (noticeError == null) it.callupsToCheck - match.id else it.callupsToCheck,
+                            errorMessage = noticeError,
+                            infoMessage = when {
+                                firstTime -> "¡Convocatoria publicada! Aquí verás las respuestas en tiempo real."
+                                players.size == 1 -> "Agregamos a ${players.first().name} a la convocatoria."
+                                else -> "Agregamos ${players.size} jugadores a la convocatoria."
+                            }
+                        )
                     }
-                )
+                }
+                // Corrección US-006: no se sabe si se guardó; el botón "Comprobar y enviar avisos" lo revisa
+                PublishCallupResult.Unconfirmed -> _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        callupsToCheck = it.callupsToCheck + match.id,
+                        errorMessage = MatchRepository.CALLUP_UNCONFIRMED_MESSAGE
+                    )
+                }
+                is PublishCallupResult.Failed -> _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        callupsToCheck = if (result.savedEarlier) it.callupsToCheck + match.id else it.callupsToCheck,
+                        errorMessage = result.message
+                    )
+                }
+            }
+        }
+    }
+
+    // Corrección US-006 · "Comprobar y enviar avisos": vuelve a consultar el servidor y avisa a los convocados
+    // guardados, sin que el DT tenga que marcar a nadie. No duplica avisos: cada uno tiene un ID fijo.
+    fun checkCallupAndNotify() {
+        val state = _uiState.value
+        val match = state.match ?: return
+        if (!state.canManageMatch || state.isLoading) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null, infoMessage = null) }
+            when (val result = MatchRepository.checkSavedCallup(match.id)) {
+                is PublishCallupResult.Saved -> {
+                    val noticeError = notify(recipientsOf(result.callups), newCallupNotice(match))
+                    val savedIds = result.callups.map { it.playerId }.toSet()
+                    _uiState.update {
+                        val selection = it.selection - savedIds
+                        // Marcados que aún no se guardan (al agregar, o si falló el lote 2)
+                        val missing = it.activeRoster.count { player -> player.id in selection }
+                        it.copy(
+                            isLoading = false,
+                            selection = selection,
+                            // Si el envío falló, sigue por comprobar: clearMatch borra el aviso pendiente al salir
+                            callupsToCheck = if (noticeError == null) it.callupsToCheck - match.id else it.callupsToCheck,
+                            errorMessage = noticeError,
+                            infoMessage = when {
+                                noticeError != null -> null
+                                missing == 1 -> "Enviamos los avisos de los convocados guardados. Falta 1 jugador por guardar: toca Agregar."
+                                missing > 1 -> "Enviamos los avisos de los convocados guardados. Faltan $missing jugadores por guardar: toca Agregar."
+                                else -> "¡Listo! La convocatoria está guardada y enviamos los avisos."
+                            }
+                        )
+                    }
+                }
+                PublishCallupResult.Unconfirmed -> _uiState.update {
+                    it.copy(isLoading = false, errorMessage = MatchRepository.CALLUP_UNCONFIRMED_MESSAGE)
+                }
+                is PublishCallupResult.Failed -> _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        callupsToCheck = it.callupsToCheck - match.id,
+                        errorMessage = result.message
+                    )
+                }
             }
         }
     }
@@ -410,8 +616,15 @@ class MatchViewModel : ViewModel() {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null, infoMessage = null) }
             val error = notify(pending.recipients, pending.draft)
+            // Si ya salieron los avisos de la convocatoria, no queda nada por comprobar
+            val callupNoticesSent = error == null && pending.draft.type == NotificationType.CALLUP
             _uiState.update {
-                it.copy(isLoading = false, errorMessage = error, infoMessage = if (error == null) "¡Listo! Enviamos los avisos." else null)
+                it.copy(
+                    isLoading = false,
+                    callupsToCheck = if (callupNoticesSent) it.callupsToCheck - pending.draft.matchId else it.callupsToCheck,
+                    errorMessage = error,
+                    infoMessage = if (error == null) "¡Listo! Enviamos los avisos." else null
+                )
             }
         }
     }
@@ -489,6 +702,52 @@ class MatchViewModel : ViewModel() {
         }
     }
 
+    // ---------- Operadores (DT, US-008) ----------
+
+    // Marcar o desmarcar a un operador (máximo 5, RN-010)
+    fun toggleOperator(uid: String) {
+        _uiState.update { state ->
+            val current = state.selectedOperators
+            when {
+                uid in current -> state.copy(operatorDraft = current - uid, errorMessage = null)
+                current.size >= MAX_OPERATORS ->
+                    state.copy(errorMessage = "Puedes elegir como máximo $MAX_OPERATORS operadores.", infoMessage = null)
+                else -> state.copy(operatorDraft = current + uid, errorMessage = null)
+            }
+        }
+    }
+
+    fun saveOperators() {
+        val state = _uiState.value
+        val match = state.match ?: return
+        val draft = state.operatorDraft ?: return
+        if (!state.canEditOperators || state.isLoading) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null, infoMessage = null) }
+            // Solo usuarios ACTIVOS según el directorio (la regla rechaza a los inactivos): los demás se quitan solos.
+            // Se guardan en el orden del directorio para que la lista no cambie de orden cada vez.
+            val active = state.operatorCandidates.filter { it.uid in draft && it.isActive }.map { it.uid }
+            val removed = draft.size - active.size
+            val result = MatchRepository.saveOperators(match.id, active)
+            val removedText = when (removed) {
+                0 -> ""
+                1 -> " Quitamos a 1 persona porque su cuenta ya no está activa."
+                else -> " Quitamos a $removed personas porque sus cuentas ya no están activas."
+            }
+            _uiState.update {
+                it.copy(
+                    isLoading = false,
+                    operatorDraft = if (result.isSuccess) null else active.toSet(),
+                    errorMessage = result.exceptionOrNull()?.message,
+                    infoMessage = if (result.isSuccess) {
+                        (if (active.isEmpty()) "Listo: solo tú registrarás este partido." else "¡Operadores guardados! Ya pueden registrar este partido.") +
+                            removedText
+                    } else null
+                )
+            }
+        }
+    }
+
     // ---------- Reprogramar y cancelar (DT, antes del inicio) ----------
     fun startReschedule() {
         val match = _uiState.value.match ?: return
@@ -554,6 +813,7 @@ class MatchViewModel : ViewModel() {
     }
 
     companion object {
+        private const val SCORE_DAYS = 30
         const val NO_TEAM_MESSAGE = "Aún no tienes un equipo asignado. Pide a la administración que te asigne uno."
     }
 }
